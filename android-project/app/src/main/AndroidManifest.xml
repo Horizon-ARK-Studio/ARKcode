@@ -43,13 +43,23 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.ArkwareApp">
 
+        <!-- windowSoftInputMode="adjustResize": without it the default
+             behavior lets the on-screen keyboard simply overlap the
+             WebView instead of shrinking it, which the SPA's own layout
+             then has no way to react to. Never mattered for a
+             video-first SPA like YouTube (no persistent text input to
+             cover); matters a lot for a typing-heavy one like
+             vscode.dev, where the keyboard would otherwise sit directly
+             on top of whatever line of the editor -- or the command
+             palette/find widget -- the user is actively typing into. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="unspecified"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:launchMode="singleTask"
-            android:theme="@style/Theme.ArkwareApp.Starting">
+            android:theme="@style/Theme.ArkwareApp.Starting"
+            android:windowSoftInputMode="adjustResize">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

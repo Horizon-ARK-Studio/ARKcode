@@ -2,6 +2,7 @@ package com.horizonarkstudio.arkware
 
 import android.Manifest
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,8 +11,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
+import android.util.Base64
 import android.view.WindowManager
 import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -27,9 +31,11 @@ import com.horizonarkstudio.arkware.logging.ArkLogger
 import com.horizonarkstudio.arkware.media.MediaSessionCoordinator
 import com.horizonarkstudio.arkware.prefs.ForceFillPreference
 import com.horizonarkstudio.arkware.theme.StatusBarThemeApplier
+import com.horizonarkstudio.arkware.webview.ArkFileChooserHandler
 import com.horizonarkstudio.arkware.webview.ArkPopupWindowHandler
 import com.horizonarkstudio.arkware.webview.ArkScripts
 import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
+import java.io.File
 
 /**
  * Generic Stage-1 shell Activity for an ARKware Android build.
@@ -47,7 +53,7 @@ import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
  * com.horizonarkstudio.arkware --
  *
  *  - `webview.ArkWebViewFactory` -- builds/configures the WebView
- *    and its three JS bridges (GoF Factory)
+ *    and its four JS bridges (GoF Factory)
  *  - `webview.bridge.*` -- the JS bridges themselves, sharing a common
  *    `ArkJsBridge` abstract base for uniform try/catch/finally
  *    logging (GoF Abstract Class / Template Method)
@@ -77,7 +83,7 @@ import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
  * the collaborator that actually implements it, rather than one large
  * comment block here -- see each class listed above.
  *
- * Two more collaborators cover cases the original ARKtube-only shell
+ * Four more collaborators cover cases the original ARKtube-only shell
  * never had to handle, needed once a heavier, non-video SPA (e.g.
  * vscode.dev) is targeted instead of a mobile video site:
  *  - `webview.ArkPopupWindowHandler` -- window.open() popups, i.e.
@@ -85,14 +91,21 @@ import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
  *  - [setupDownloadListener] below -- SPA-triggered file downloads
  *    (Settings Sync export, extension .vsix downloads, etc.), routed
  *    through Android's DownloadManager instead of vanishing silently
+ *  - `webview.bridge.DownloadBridge` + [saveBlobFileToDownloads] --
+ *    client-generated `blob:` URL downloads, which never reach
+ *    [setupDownloadListener]'s DownloadListener at all (that only
+ *    fires for genuine http(s) URLs) -- see BLOB_DOWNLOAD_INTERCEPT_JS
+ *    for why this has to be a JS-side intercept, not a native one
+ *  - `webview.ArkFileChooserHandler` -- `<input type="file">` /
+ *    onShowFileChooser(), the fallback an SPA reaches for when it
+ *    wants local file access but the platform doesn't offer the File
+ *    System Access API (Android WebView never implements
+ *    `showOpenFilePicker`/`showDirectoryPicker` at all)
  *
  * Explicitly out of scope even with the above (future stages, see the
  * repo-root roadmap): a persistent nav shell/sidebar, PiP, a real
- * playlist/queue or Android Auto browsing, chromecast, ad-blocking,
- * blob: URL downloads (client-generated files that never touch a real
- * URL -- would need a JS bridge to intercept, not just
- * DownloadListener, which only fires for http(s) URLs), or any custom
- * UI layered over the page.
+ * playlist/queue or Android Auto browsing, chromecast, ad-blocking, or
+ * any custom UI layered over the page.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -103,6 +116,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusBarThemeApplier: StatusBarThemeApplier
     private lateinit var layoutReflowHelper: LayoutReflowHelper
     private lateinit var popupWindowHandler: ArkPopupWindowHandler
+    private lateinit var fileChooserHandler: ArkFileChooserHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Must be called before super.onCreate().
@@ -140,6 +154,7 @@ class MainActivity : AppCompatActivity() {
             mediaSessionCoordinator = MediaSessionCoordinator(this) { webView }
 
             popupWindowHandler = ArkPopupWindowHandler(this)
+            fileChooserHandler = ArkFileChooserHandler(this)
 
             webView = ArkWebViewFactory.create(
                 context = this,
@@ -154,6 +169,9 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread { fullscreenController.onFullscreenVideoSize(width, height) }
                 },
                 mediaPlaybackListener = mediaSessionCoordinator,
+                blobDownloadListener = { base64Data, filename, mimeType ->
+                    saveBlobFileToDownloads(base64Data, filename, mimeType)
+                },
                 webChromeClient = buildWebChromeClient()
             )
             // webView is added to rootLayout here and never removed or
@@ -243,6 +261,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Only currently used to deliver [ArkFileChooserHandler]'s file
+     * chooser result back to the WebView (`REQUEST_CODE_FILE_CHOOSER`)
+     * -- see that class's doc for why it uses the classic
+     * startActivityForResult API this pairs with.
+     */
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        ArkLogger.track(COMPONENT, "onActivityResult:$requestCode") {
+            if (requestCode == ArkFileChooserHandler.REQUEST_CODE_FILE_CHOOSER) {
+                fileChooserHandler.onFileChooserResult(resultCode, data)
+            }
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -313,6 +347,19 @@ class MainActivity : AppCompatActivity() {
                 popupWindowHandler.closePopupWindow()
             }
         }
+
+        // `<input type="file">` (or whatever local-file-access fallback
+        // the SPA reaches for when the File System Access API isn't
+        // available -- see ArkFileChooserHandler's class doc). Without
+        // this override, a bare WebView never launches a chooser at
+        // all -- the click is a silent dead end.
+        override fun onShowFileChooser(
+            webView: WebView,
+            filePathCallback: ValueCallback<Array<Uri>>,
+            fileChooserParams: FileChooserParams
+        ): Boolean = ArkLogger.track(COMPONENT, "onShowFileChooser") {
+            fileChooserHandler.showFileChooser(filePathCallback, fileChooserParams)
+        }
     }
 
     /**
@@ -323,13 +370,12 @@ class MainActivity : AppCompatActivity() {
      * DownloadListener, the request just disappears with nothing in
      * Logcat to explain why.
      *
-     * Only covers http(s) URL downloads. Does NOT cover blob: URL
-     * downloads (client-generated files that never touch a real
-     * network URL -- e.g. some "export" buttons that build the file
-     * in JS and hand the browser a Blob) -- DownloadListener only
-     * fires for genuine URL-based downloads; a blob: download would
-     * need a dedicated JS bridge to intercept the Blob and hand its
-     * bytes to native code instead.
+     * Only covers http(s) URL downloads -- DownloadListener never
+     * fires for a `blob:` URL download (client-generated files that
+     * never touch a real network URL, e.g. an "export" button that
+     * builds the file in JS and hands the browser a Blob). That case
+     * is handled separately, by BLOB_DOWNLOAD_INTERCEPT_JS +
+     * DownloadBridge + [saveBlobFileToDownloads] below.
      */
     private fun setupDownloadListener() {
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -360,6 +406,70 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    /**
+     * Writes a client-generated (`blob:` URL) file's bytes to the
+     * public Downloads directory -- the counterpart to
+     * [setupDownloadListener] for downloads that never touch a real
+     * http(s) URL at all (see DownloadBridge's class doc for why this
+     * path exists separately). [base64Data] arrives already decoded
+     * from a data: URL prefix by BLOB_DOWNLOAD_INTERCEPT_JS.
+     *
+     * Runs on the WebView's own JS thread (this is a
+     * `@JavascriptInterface` callback, not UI-thread code -- see
+     * ArkJsBridge's class doc), which is actually the right thread for
+     * the file I/O here; only the user-facing Toast needs to hop back
+     * to the UI thread, same as themeListener above.
+     */
+    private fun saveBlobFileToDownloads(base64Data: String, filename: String, mimeType: String) {
+        ArkLogger.track(COMPONENT, "saveBlobFileToDownloads") {
+            val safeFilename = filename.ifBlank { "download" }
+            try {
+                val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val resolver = contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, safeFilename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri == null) {
+                        ArkLogger.e(COMPONENT, "saveBlobFileToDownloads: MediaStore insert returned null for $safeFilename", null)
+                        showDownloadFailedToast()
+                        return@track
+                    }
+                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                } else {
+                    // Same pre-scoped-storage path (and same permission
+                    // this app already requests at startup) as
+                    // setupDownloadListener's own API 24-28 branch.
+                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        ArkLogger.w(COMPONENT, "saveBlobFileToDownloads: WRITE_EXTERNAL_STORAGE not granted, skipping $safeFilename")
+                        showDownloadFailedToast()
+                        return@track
+                    }
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    downloadsDir.mkdirs()
+                    File(downloadsDir, safeFilename).writeBytes(bytes)
+                }
+                runOnUiThread {
+                    Toast.makeText(this, getString(R.string.downloading_file), Toast.LENGTH_SHORT).show()
+                }
+            } catch (t: Throwable) {
+                ArkLogger.e(COMPONENT, "saveBlobFileToDownloads: failed to save $safeFilename", t)
+                showDownloadFailedToast()
+            }
+        }
+    }
+
+    private fun showDownloadFailedToast() {
+        runOnUiThread {
+            Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
         }
     }
 

@@ -6,6 +6,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.horizonarkstudio.arkware.config.SpaConfig
 import com.horizonarkstudio.arkware.logging.ArkLogger
+import com.horizonarkstudio.arkware.webview.bridge.BlobDownloadListener
+import com.horizonarkstudio.arkware.webview.bridge.DownloadBridge
 import com.horizonarkstudio.arkware.webview.bridge.FullscreenVideoSizeListener
 import com.horizonarkstudio.arkware.webview.bridge.MediaPlaybackBridge
 import com.horizonarkstudio.arkware.webview.bridge.MediaPlaybackListener
@@ -15,7 +17,7 @@ import com.horizonarkstudio.arkware.webview.bridge.ThemeChangeListener
 
 /**
  * GoF Factory: the single place that knows how to assemble a
- * fully-configured ARKware WebView (settings, user agent, the three
+ * fully-configured ARKware WebView (settings, user agent, the four
  * JS bridges, and script injection on page load). Callers hand in
  * listeners and native callbacks; they never touch WebSettings
  * directly.
@@ -34,12 +36,13 @@ object ArkWebViewFactory {
         themeListener: ThemeChangeListener,
         orientationListener: FullscreenVideoSizeListener,
         mediaPlaybackListener: MediaPlaybackListener,
+        blobDownloadListener: BlobDownloadListener,
         webChromeClient: WebChromeClient
     ): WebView = ArkLogger.track(COMPONENT, "create") {
         val webView = WebView(context)
         try {
             configureSettings(webView)
-            attachBridges(webView, themeListener, orientationListener, mediaPlaybackListener)
+            attachBridges(webView, themeListener, orientationListener, mediaPlaybackListener, blobDownloadListener)
             webView.webViewClient = buildWebViewClient()
             webView.webChromeClient = webChromeClient
         } catch (t: Throwable) {
@@ -81,11 +84,13 @@ object ArkWebViewFactory {
         webView: WebView,
         themeListener: ThemeChangeListener,
         orientationListener: FullscreenVideoSizeListener,
-        mediaPlaybackListener: MediaPlaybackListener
+        mediaPlaybackListener: MediaPlaybackListener,
+        blobDownloadListener: BlobDownloadListener
     ) {
         webView.addJavascriptInterface(ThemeBridge(themeListener), "ArkTheme")
         webView.addJavascriptInterface(OrientationBridge(orientationListener), "ArkOrientation")
         webView.addJavascriptInterface(MediaPlaybackBridge(mediaPlaybackListener), "ArkMediaPlayback")
+        webView.addJavascriptInterface(DownloadBridge(blobDownloadListener), "ArkDownload")
     }
 
     private fun buildWebViewClient(): WebViewClient = object : WebViewClient() {
@@ -98,6 +103,7 @@ object ArkWebViewFactory {
                     ArkScripts.nagHideJs(SpaConfig.nagHideSelectors, SpaConfig.nagHideTextMatches), null
                 )
                 view.evaluateJavascript(ArkScripts.mediaSessionJs(SpaConfig.displayName), null)
+                view.evaluateJavascript(ArkScripts.BLOB_DOWNLOAD_INTERCEPT_JS, null)
             }
         }
     }

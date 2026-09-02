@@ -175,6 +175,66 @@ object ArkScripts {
         })();
     """
 
+    // Catches clicks on `<a download href="blob:...">` -- the standard
+    // pattern an SPA uses to hand the browser a client-generated file
+    // (Settings Sync export, a generated .vsix, any "Save As" fallback
+    // for a runtime with no File System Access API to write through
+    // directly, e.g. vscode.dev on Android). A bare WebView's
+    // DownloadListener never fires for these at all -- it only sees
+    // genuine http(s) URL requests -- so without this the click is a
+    // silent dead end with nothing in Logcat to explain why.
+    //
+    // Runs in the capture phase specifically so it can preventDefault()
+    // before the WebView's own click handling ever tries (and fails)
+    // to navigate to the blob: URL. The Blob's bytes are read here,
+    // in page JS, because that's the only place a blob: URL can be
+    // dereferenced at all -- native code has no way to reach it on its
+    // own -- then handed to DownloadBridge as base64 to actually be
+    // written to disk.
+    const val BLOB_DOWNLOAD_INTERCEPT_JS = """
+        (function() {
+            if (window.__arkBlobDownloadInstalled) { return; }
+            window.__arkBlobDownloadInstalled = true;
+
+            function blobToBase64(blob) {
+                return new Promise(function(resolve, reject) {
+                    var reader = new FileReader();
+                    reader.onloadend = function() {
+                        var result = reader.result || '';
+                        var idx = result.indexOf(',');
+                        resolve(idx !== -1 ? result.slice(idx + 1) : result);
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+            }
+
+            function handleBlobDownload(anchor) {
+                if (!window.ArkDownload) { return; }
+                fetch(anchor.href)
+                    .then(function(res) { return res.blob(); })
+                    .then(function(blob) {
+                        return blobToBase64(blob).then(function(base64Data) {
+                            var filename = anchor.download || 'download';
+                            var mimeType = blob.type || 'application/octet-stream';
+                            window.ArkDownload.saveBlobFile(base64Data, filename, mimeType);
+                        });
+                    })
+                    .catch(function(err) {
+                        console.error('ArkDownload: failed to read blob for download', err);
+                    });
+            }
+
+            document.addEventListener('click', function(evt) {
+                var anchor = evt.target && evt.target.closest ? evt.target.closest('a[download]') : null;
+                if (!anchor || !anchor.href || anchor.href.indexOf('blob:') !== 0) { return; }
+                evt.preventDefault();
+                evt.stopPropagation();
+                handleBlobDownload(anchor);
+            }, true);
+        })();
+    """
+
     /**
      * Hides an SPA's own "open app"/"install our app" nag button or
      * banner, since this shell already *is* that experience, just
