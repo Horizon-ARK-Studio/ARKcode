@@ -50,8 +50,8 @@
              video-first SPA like YouTube (no persistent text input to
              cover); matters a lot for a typing-heavy one like
              vscode.dev, where the keyboard would otherwise sit directly
-             on top of whatever line of the editor -- or the command
-             palette/find widget -- the user is actively typing into. -->
+             on top of whatever line of the editor, or the command
+             palette/find widget, the user is actively typing into. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
