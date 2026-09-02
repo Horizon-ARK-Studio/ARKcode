@@ -26,6 +26,15 @@
          MainActivity.onCreate(). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- MainActivity.setupDownloadListener() -> DownloadManager's
+         setDestinationInExternalPublicDir(). Only required on API
+         24-28 (this app's minSdk through Android 9); API 29+ writes
+         to the public Downloads dir via DownloadManager without this
+         permission at all under scoped storage, hence maxSdkVersion. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <application
         android:name=".ArkwareApplication"
         android:allowBackup="true"

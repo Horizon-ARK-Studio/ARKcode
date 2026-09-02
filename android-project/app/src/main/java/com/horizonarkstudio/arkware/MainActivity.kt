@@ -1,15 +1,21 @@
 package com.horizonarkstudio.arkware
 
 import android.Manifest
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.WindowManager
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -21,6 +27,7 @@ import com.horizonarkstudio.arkware.logging.ArkLogger
 import com.horizonarkstudio.arkware.media.MediaSessionCoordinator
 import com.horizonarkstudio.arkware.prefs.ForceFillPreference
 import com.horizonarkstudio.arkware.theme.StatusBarThemeApplier
+import com.horizonarkstudio.arkware.webview.ArkPopupWindowHandler
 import com.horizonarkstudio.arkware.webview.ArkScripts
 import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
 
@@ -70,10 +77,22 @@ import com.horizonarkstudio.arkware.webview.ArkWebViewFactory
  * the collaborator that actually implements it, rather than one large
  * comment block here -- see each class listed above.
  *
+ * Two more collaborators cover cases the original ARKtube-only shell
+ * never had to handle, needed once a heavier, non-video SPA (e.g.
+ * vscode.dev) is targeted instead of a mobile video site:
+ *  - `webview.ArkPopupWindowHandler` -- window.open() popups, i.e.
+ *    third-party sign-in (GitHub/Microsoft/Google OAuth)
+ *  - [setupDownloadListener] below -- SPA-triggered file downloads
+ *    (Settings Sync export, extension .vsix downloads, etc.), routed
+ *    through Android's DownloadManager instead of vanishing silently
+ *
  * Explicitly out of scope even with the above (future stages, see the
- * repo-root roadmap): a persistent nav shell/sidebar, download
- * interception, PiP, a real playlist/queue or Android Auto browsing,
- * chromecast, ad-blocking, or any custom UI layered over the page.
+ * repo-root roadmap): a persistent nav shell/sidebar, PiP, a real
+ * playlist/queue or Android Auto browsing, chromecast, ad-blocking,
+ * blob: URL downloads (client-generated files that never touch a real
+ * URL -- would need a JS bridge to intercept, not just
+ * DownloadListener, which only fires for http(s) URLs), or any custom
+ * UI layered over the page.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -83,6 +102,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaSessionCoordinator: MediaSessionCoordinator
     private lateinit var statusBarThemeApplier: StatusBarThemeApplier
     private lateinit var layoutReflowHelper: LayoutReflowHelper
+    private lateinit var popupWindowHandler: ArkPopupWindowHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Must be called before super.onCreate().
@@ -119,6 +139,8 @@ class MainActivity : AppCompatActivity() {
             // the first time a transport command actually needs it.
             mediaSessionCoordinator = MediaSessionCoordinator(this) { webView }
 
+            popupWindowHandler = ArkPopupWindowHandler(this)
+
             webView = ArkWebViewFactory.create(
                 context = this,
                 themeListener = { isDark, cssBackground ->
@@ -146,6 +168,8 @@ class MainActivity : AppCompatActivity() {
 
             layoutReflowHelper = LayoutReflowHelper(webView)
 
+            setupDownloadListener()
+
             webView.loadUrl(SpaConfig.targetUrl)
 
             // Only a *bound* (not yet foreground) service at this point --
@@ -154,6 +178,7 @@ class MainActivity : AppCompatActivity() {
             mediaSessionCoordinator.bind()
 
             requestNotificationPermissionIfNeeded()
+            requestLegacyStoragePermissionIfNeeded()
         }
     }
 
@@ -233,6 +258,14 @@ class MainActivity : AppCompatActivity() {
             val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
             ArkLogger.i(COMPONENT, "POST_NOTIFICATIONS permission result: granted=$granted")
         }
+        // Same "log only, nothing else gated on it here" shape as
+        // notifications above -- a denial just means setupDownloadListener's
+        // own runtime check will skip and toast the next time a download
+        // is actually triggered, rather than anything failing right now.
+        if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            ArkLogger.i(COMPONENT, "WRITE_EXTERNAL_STORAGE permission result: granted=$granted")
+        }
     }
 
     /**
@@ -252,6 +285,80 @@ class MainActivity : AppCompatActivity() {
         override fun onHideCustomView() {
             ArkLogger.track(COMPONENT, "onHideCustomView") {
                 fullscreenController.hideCustomView()
+            }
+        }
+
+        // window.open() -- most commonly a third-party sign-in popup
+        // (GitHub/Microsoft/Google OAuth). Requires
+        // javaScriptCanOpenWindowsAutomatically/setSupportMultipleWindows
+        // (see ArkWebViewFactory.configureSettings) to fire at all; the
+        // actual popup hosting is delegated to [popupWindowHandler] --
+        // see its class doc for why a Dialog rather than rootLayout.
+        override fun onCreateWindow(
+            view: WebView,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: android.os.Message
+        ): Boolean = ArkLogger.track(COMPONENT, "onCreateWindow") {
+            popupWindowHandler.createPopupWindow(resultMsg)
+        }
+
+        // The popup calling `window.close()` itself once its flow is
+        // done (the other exit path -- redirecting back to the
+        // opener's own origin instead -- is handled inside
+        // ArkPopupWindowHandler directly, since that one isn't
+        // signaled through WebChromeClient at all).
+        override fun onCloseWindow(window: WebView) {
+            ArkLogger.track(COMPONENT, "onCloseWindow") {
+                popupWindowHandler.closePopupWindow()
+            }
+        }
+    }
+
+    /**
+     * Routes SPA-triggered file downloads (Settings Sync export, an
+     * extension's .vsix, etc.) through Android's DownloadManager
+     * instead of them silently vanishing -- a bare WebView has no
+     * default handling for a triggered download at all; without a
+     * DownloadListener, the request just disappears with nothing in
+     * Logcat to explain why.
+     *
+     * Only covers http(s) URL downloads. Does NOT cover blob: URL
+     * downloads (client-generated files that never touch a real
+     * network URL -- e.g. some "export" buttons that build the file
+     * in JS and hand the browser a Blob) -- DownloadListener only
+     * fires for genuine URL-based downloads; a blob: download would
+     * need a dedicated JS bridge to intercept the Blob and hand its
+     * bytes to native code instead.
+     */
+    private fun setupDownloadListener() {
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            ArkLogger.track(COMPONENT, "onDownloadStart") {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                        PackageManager.PERMISSION_GRANTED
+                ) {
+                    ArkLogger.w(COMPONENT, "onDownloadStart: WRITE_EXTERNAL_STORAGE not granted, skipping download for $url")
+                    Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+                    return@track
+                }
+                try {
+                    val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    val request = DownloadManager.Request(Uri.parse(url)).apply {
+                        setMimeType(mimeType)
+                        addRequestHeader("User-Agent", userAgent)
+                        setTitle(fileName)
+                        setDescription(getString(R.string.downloading_file))
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                    }
+                    val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                    downloadManager.enqueue(request)
+                    Toast.makeText(this, getString(R.string.downloading_file), Toast.LENGTH_SHORT).show()
+                } catch (t: Throwable) {
+                    ArkLogger.e(COMPONENT, "Failed to start download for $url", t)
+                    Toast.makeText(this, getString(R.string.download_failed), Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -291,8 +398,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * WRITE_EXTERNAL_STORAGE (see AndroidManifest.xml) is a dangerous
+     * permission requiring a runtime grant on API 24-28, the range it
+     * still applies to here -- API 29+ never needs it at all (scoped
+     * storage exempts DownloadManager's public-dir writes), hence the
+     * upper SDK_INT bound matching the manifest's maxSdkVersion.
+     */
+    private fun requestLegacyStoragePermissionIfNeeded() {
+        ArkLogger.track(COMPONENT, "requestLegacyStoragePermissionIfNeeded") {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                    PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), STORAGE_PERMISSION_REQUEST_CODE
+                )
+            }
+        }
+    }
+
     companion object {
         private const val COMPONENT = "MainActivity"
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
+        private const val STORAGE_PERMISSION_REQUEST_CODE = 1002
     }
 }

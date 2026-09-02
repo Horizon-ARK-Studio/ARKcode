@@ -67,6 +67,14 @@ object ArkWebViewFactory {
         // actual mobile layout rather than a desktop layout squeezed
         // into a phone-sized WebView.
         webView.settings.userAgentString = webView.settings.userAgentString?.replace("; wv", "")
+        // Without these two, `window.open()` (the mechanism most
+        // third-party sign-in flows -- GitHub/Microsoft/Google OAuth --
+        // use to pop a second window) is a silent no-op: WebChromeClient
+        // .onCreateWindow() is simply never invoked at all. See
+        // ArkPopupWindowHandler, which is what actually receives that
+        // callback once it's enabled to fire.
+        webView.settings.javaScriptCanOpenWindowsAutomatically = true
+        webView.settings.setSupportMultipleWindows(true)
     }
 
     private fun attachBridges(
