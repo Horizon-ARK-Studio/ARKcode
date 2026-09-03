@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      Required even for loopback-only sockets -- Android gates all
+      Required even for loopback-only sockets: Android gates all
       socket I/O behind this permission regardless of destination
       address, IdeBackendService's 127.0.0.1 ServerSocket included.
     -->
@@ -11,14 +11,14 @@
     <!--
       IdeBackendService isn't media playback, location, or any of the
       other typed foreground-service categories Android 14 (API 34)
-      distinguishes -- "specialUse" plus the required
+      distinguishes: "specialUse" plus the required
       android:value description below is the correct declaration for
       a locally-scoped backend process with no closer-matching type.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!--
       Runtime-requested (API 33+) in MainActivity before the first
-      IdeBackendService start, not just declared here -- see
+      IdeBackendService start, not just declared here: see
       MainActivity.kt's onCreate(). Needed because promoteToForeground()
       posts a notification once the backend is confirmed listening.
     -->

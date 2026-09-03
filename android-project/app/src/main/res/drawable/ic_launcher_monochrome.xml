@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-tone mark for Android 13+ themed icons -- the system
+<!-- Single-tone mark for Android 13+ themed icons: the system
      recolors this to match the user's wallpaper/theme, so it must be
      flat, not gradient. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

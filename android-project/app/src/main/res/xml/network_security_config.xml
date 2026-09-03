@@ -2,15 +2,15 @@
 <!--
   Permits cleartext (http://) traffic to 127.0.0.1 only.
 
-  targetSdkVersion 28+ blocks all cleartext traffic by default, and --
-  this is the part that bites if you assume otherwise -- there is no
+  targetSdkVersion 28+ blocks all cleartext traffic by default, and
+  this is the part that bites if you assume otherwise: there is no
   built-in exception for loopback. Without this, WebView's request to
   http://127.0.0.1:<port>/ fails silently as
   net::ERR_CLEARTEXT_NOT_PERMITTED with no obvious cause pointing back
   to this file. See VSCODE-IDE-IMPLEMENTATION-PLAN.md section 4.4.
 
   Scope is intentionally the single loopback literal, not a wildcard
-  domain and not cleartextTrafficPermitted="true" at the top level --
+  domain and not cleartextTrafficPermitted="true" at the top level:
   the IDE backend never needs to be reachable over cleartext from
   anywhere else.
 -->

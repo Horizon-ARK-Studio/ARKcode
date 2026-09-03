@@ -7,7 +7,7 @@
       everywhere else it falls back to the branded roles below.
 
       NoActionBar because Application mode's WebView fills the entire
-      window (see MainActivity.kt) -- there is no toolbar/chrome.
+      window (see MainActivity.kt): there is no toolbar/chrome.
     -->
     <style name="Theme.ArkApp" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/md_theme_primary</item>

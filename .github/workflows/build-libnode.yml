@@ -55,6 +55,9 @@ name: Build libnode.so
 #   vendored" and "the build system we run it with".
 
 on:
+  push:
+    branches: [app]
+  pull_request:
   workflow_dispatch:
     inputs:
       arch:
