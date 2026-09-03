@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Required even for loopback-only sockets -- Android gates all
+      socket I/O behind this permission regardless of destination
+      address, IdeBackendService's 127.0.0.1 ServerSocket included.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      IdeBackendService isn't media playback, location, or any of the
+      other typed foreground-service categories Android 14 (API 34)
+      distinguishes -- "specialUse" plus the required
+      android:value description below is the correct declaration for
+      a locally-scoped backend process with no closer-matching type.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!--
+      Runtime-requested (API 33+) in MainActivity before the first
+      IdeBackendService start, not just declared here -- see
+      MainActivity.kt's onCreate(). Needed because promoteToForeground()
+      posts a notification once the backend is confirmed listening.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".ArkApplication"
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.ArkApp">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="fullSensor"
+            android:theme="@style/Theme.ArkApp">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".backend.IdeBackendService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the on-device IDE backend the WebView renders against on 127.0.0.1" />
+        </service>
+    </application>
+</manifest>

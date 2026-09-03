@@ -17,6 +17,16 @@ kind of undocumented decision that looks like an accident later.
 **Goal:** get the Android shell working with no outstanding issues,
 generalized from ARKtube's proven pattern rather than YouTube-specific.
 
+> **Status:** `android-project/` now exists, scaffolded per
+> `VSCODE-IDE-IMPLEMENTATION-PLAN.md`'s Phase 0/1 (see that document's
+> own progress note at the top). This is the `ide`-target instance of
+> v1's shell, not yet the generic config-driven-target-SPA shell this
+> section describes -- `SpaConfig`'s runtime-resolved-URL extension
+> (`VSCODE-IDE-IMPLEMENTATION-PLAN.md` §2) is still a TODO once a
+> second target exists to generalize against, consistent with
+> `CODE-STYLE.md`'s "don't reach for structure the problem hasn't
+> asked for yet."
+
 **In scope:**
 * native Kotlin `WebView` shell, config-driven target SPA (not
   hardcoded to one site)

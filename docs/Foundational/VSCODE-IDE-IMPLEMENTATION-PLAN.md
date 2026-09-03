@@ -2,6 +2,36 @@
 
 Status: **draft, Node/code-server sourcing intentionally open (§5)**
 
+> **Progress note (this patch):** Phase 0 landed --
+> `android-project/` now exists (previously this branch was docs-only,
+> Stage 0), scaffolded via `arklight android scaffold` off ARKlight's
+> `alpha` branch per §3, hand-edited into the package-per-concern shape
+> `CODE-STYLE.md` calls for (`backend/`, `logging/`). Phase 1's
+> placeholder backend + port-handoff plumbing also landed:
+> `IdeBackendService` binds a loopback socket on `127.0.0.1:0`, `Ready`/
+> `Failed`/`Starting` states flow to `MainActivity` over a bound-service
+> `StateFlow`, and `MainActivity` navigates the `WebView` off the static
+> placeholder page once the backend reports a real port. See
+> `bugs-caught/` for one correction this surfaced (§2's claim that
+> `MediaPlaybackService.kt` already exists in this repo to copy the
+> shape from -- it doesn't yet; `IdeBackendService` was written from
+> this document's own reasoning instead).
+>
+> The VS Code **workbench** itself (this document's actual subject --
+> the static frontend under `lib/vscode/out/vs/` in any `code-server`
+> release, `product.json` alongside it) is intentionally *not* checked
+> into `android-project/`. See `scripts/vendor-code-server.sh` and its
+> own header for why (~56MB even after dropping every server-side/
+> arch-specific file, which is real weight to carry in git history
+> forever versus fetching once at build time) and for the exact pinned
+> version (`code-server` v4.135.0) and checksum this patch verified the
+> script against. Run it once locally (`./scripts/vendor-code-server.sh`
+> from `android-project/`) to populate
+> `app/src/main/assets/code-server/workbench/` before a Gradle build
+> that expects it to be present -- Phase 3 is what actually wires that
+> directory up to be served, not this patch (see §7's phase table,
+> unchanged).
+
 This plan replaces ARKware's current `vscode` flavor -- which just
 points the shell at the *remote* `vscode.dev` SPA, per
 `android-project/README.md` -- with a self-contained, offline-capable
