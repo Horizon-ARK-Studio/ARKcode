@@ -21,11 +21,13 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Owns the local IDE backend's process lifecycle. Foreground
- * `Service`, promoted to foreground only once the backend is
- * confirmed actually listening (see [promoteToForeground]) -- an
- * unpromoted service that never reaches real activity is a
- * foreground-service violation waiting to happen, not a lifecycle
- * detail to skip.
+ * `Service`: [promoteToForegroundStarting] satisfies Android's
+ * startForeground()-promptly contract immediately on launch, and
+ * [promoteToForeground] later swaps the notification over to the
+ * real port once the backend is confirmed listening -- see
+ * BUG-0001 in docs/bugs-caught/README.md for why the immediate call
+ * exists at all (a Service that only ever promotes on success gets
+ * killed by the OS on any failure path instead).
  *
  * This is the real launch path from VSCODE-IDE-IMPLEMENTATION-PLAN.md
  * section 4.2, replacing the earlier Phase-1 placeholder (a bare
@@ -107,6 +109,16 @@ class IdeBackendService : Service() {
     private fun startBackend(workspaceDir: String) {
         if (!running.compareAndSet(false, true)) return // already starting/running
 
+        // Explicit reset, not just relying on the initial MutableStateFlow
+        // value: on a retry after a Failed state, StateFlow only emits
+        // *distinct* values, so if launchNode() below fails again with
+        // the exact same reason string, IdeBackendState.Failed(reason)
+        // would be equal to what's already there and never re-emit --
+        // MainActivity's collector would never fire and the WebView
+        // would silently stay on the failed screen instead of showing
+        // "Starting..." during the retry attempt.
+        _state.value = IdeBackendState.Starting
+
         Thread({ launchNode(workspaceDir) }, "ide-backend-launch").apply {
             isDaemon = true
             start()
@@ -146,6 +158,20 @@ class IdeBackendService : Service() {
 
     /** See the class doc for the two artifacts this depends on. */
     private fun launchNode(workspaceDir: String) {
+        // Must happen before anything below that can return early via
+        // fail() -- Android requires a Service started via
+        // startForegroundService() (see MainActivity's
+        // ContextCompat.startForegroundService call) to call
+        // Service.startForeground() promptly (a few seconds) or the
+        // OS kills the whole process with
+        // ForegroundServiceDidNotStartInTimeException. That deadline
+        // does not care *why* startup is slow or whether it ultimately
+        // fails -- it only cares that startForeground() was called at
+        // all, so this has to run unconditionally up front, not only
+        // once a port is confirmed in watchStdoutForPort(). See
+        // BUG-0001 in docs/bugs-caught/README.md.
+        promoteToForegroundStarting()
+
         val nodeBinary = File(applicationInfo.nativeLibraryDir, "libnode.so")
         if (!nodeBinary.exists()) {
             fail(
@@ -328,9 +354,47 @@ class IdeBackendService : Service() {
         ArkLogger.e(message = "IdeBackendService: $reason")
         _state.value = IdeBackendState.Failed(reason)
         running.set(false)
+        // The startForeground() promise from promoteToForegroundStarting()
+        // is already satisfied by this point, so it's safe to drop back
+        // out of the foreground state -- there's nothing left running
+        // worth keeping a persistent notification up for.
+        @Suppress("DEPRECATION")
+        stopForeground(true)
+    }
+
+    /**
+     * Satisfies Android's startForeground()-promptly contract before
+     * any of [launchNode]'s failure-prone steps run. Uses an
+     * "indeterminate" notification text since at this point it's not
+     * yet known whether startup will succeed; [promoteToForeground]
+     * below replaces it with the real port once one exists.
+     */
+    private fun promoteToForegroundStarting() {
+        ensureNotificationChannel()
+        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.ide_backend_notification_title))
+            .setContentText(getString(R.string.ide_backend_notification_starting))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun promoteToForeground(port: Int) {
+        ensureNotificationChannel()
+        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.ide_backend_notification_title))
+            .setContentText(getString(R.string.ide_backend_notification_text, port))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .build()
+        // Already in the foreground state from promoteToForegroundStarting();
+        // calling startForeground() again just swaps the notification
+        // content over to the real, port-bearing one.
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun ensureNotificationChannel() {
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(NOTIFICATION_CHANNEL_ID) == null) {
             manager.createNotificationChannel(
@@ -341,13 +405,6 @@ class IdeBackendService : Service() {
                 )
             )
         }
-        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(getString(R.string.ide_backend_notification_title))
-            .setContentText(getString(R.string.ide_backend_notification_text, port))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setOngoing(true)
-            .build()
-        startForeground(NOTIFICATION_ID, notification)
     }
 
     companion object {

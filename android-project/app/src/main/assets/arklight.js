@@ -37,4 +37,48 @@
   document.addEventListener("DOMContentLoaded", function () {
     arkInitPage();
   });
+
+  // ---- IdeBackendState bridge -------------------------------------
+  //
+  // Native (MainActivity.onBackendState) calls these via
+  // WebView.evaluateJavascript() on every IdeBackendState emission,
+  // guarded by "window.ArkBackend && ..." on the native side so a
+  // page that hasn't loaded this script yet never throws. Only the
+  // Starting/index.html placeholder page ever sees these calls --
+  // once IdeBackendState.Ready fires, MainActivity navigates the
+  // WebView away to the real backend origin and this page (and this
+  // closure) is gone.
+  window.ArkBackend = {
+    onStarting: function () {
+      var starting = document.getElementById("ide-starting-screen");
+      var failed = document.getElementById("ide-failed-screen");
+      if (failed) failed.classList.add("is-hidden");
+      if (starting) starting.classList.remove("is-hidden");
+    },
+    onFailed: function (reason) {
+      var starting = document.getElementById("ide-starting-screen");
+      var failed = document.getElementById("ide-failed-screen");
+      var reasonEl = document.getElementById("ide-failed-reason");
+      if (reasonEl) reasonEl.textContent = reason || "";
+      if (starting) starting.classList.add("is-hidden");
+      if (failed) failed.classList.remove("is-hidden");
+    },
+  };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var retryButton = document.getElementById("ide-retry-button");
+    if (retryButton) {
+      retryButton.addEventListener("click", function () {
+        // ArkNative is the @JavascriptInterface bridge MainActivity
+        // attaches before loadUrl(PLACEHOLDER_URL) -- see
+        // MainActivity.kt. Guarded the same way, in case this page is
+        // ever opened somewhere that bridge doesn't exist (e.g. a
+        // plain browser during frontend dev).
+        if (window.ArkNative && window.ArkNative.retryBackend) {
+          window.ArkBackend.onStarting();
+          window.ArkNative.retryBackend();
+        }
+      });
+    }
+  });
 })();

@@ -684,3 +684,98 @@ map, area {
   margin: 1em 0;
   background: var(--ark-border);
 }
+
+/* Full-screen states shown before the WebView ever navigates to the
+   real backend origin -- see MainActivity.kt's onBackendState().
+   #ide-starting-screen is shown first; #ide-failed-screen swaps in
+   only on IdeBackendState.Failed (see arklight.js). */
+.ide-loading-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: var(--ark-bg);
+}
+
+.ide-loading-screen.is-hidden {
+  display: none;
+}
+
+.ide-loading-card {
+  max-width: 26rem;
+  width: 100%;
+  text-align: center;
+  border: 1px solid var(--ark-border);
+  border-radius: 16px;
+  padding: 2.25rem 1.75rem;
+}
+
+.ide-loading-card .ide-title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.ide-loading-card .ide-status {
+  color: var(--ark-muted);
+  margin: 0;
+}
+
+.ide-failed-card {
+  border-color: var(--ark-accent);
+}
+
+.ide-failed-icon {
+  color: var(--ark-accent);
+  margin-bottom: 0.75rem;
+}
+
+.ide-failed-icon svg,
+.ide-failed-icon img {
+  display: block;
+  margin: 0 auto;
+}
+
+.ide-failed-icon img {
+  max-width: 12rem;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+.ide-failed-card .ide-title {
+  margin-top: 0.25rem;
+}
+
+.ide-failed-reason {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--ark-muted);
+  background: var(--ark-border);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  margin: 1rem 0 0;
+  text-align: left;
+  word-break: break-word;
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+.ide-retry-button {
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  background: var(--ark-accent);
+  color: var(--ark-button-text);
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.7em 1.4em;
+  margin-top: 1.5rem;
+  cursor: pointer;
+}
+
+.ide-retry-button:active {
+  background: var(--ark-accent-hover);
+}

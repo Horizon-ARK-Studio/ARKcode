@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">ARKware IDE</string>
     <string name="ide_backend_channel_name">IDE backend</string>
+    <string name="ide_backend_notification_starting">Starting the local IDE backend…</string>
     <string name="ide_backend_notification_title">ARKware IDE backend running</string>
     <string name="ide_backend_notification_text">Listening on 127.0.0.1:%1$d</string>
     <string name="open_workspace_folder">Open Folder</string>

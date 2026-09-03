@@ -7,7 +7,25 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="ide-loading-screen"><div class="ide-loading-card"><p class="ide-title">ARKware IDE</p><p class="ide-status">Starting the local IDE backend...</p></div></div>
+<div id="ide-starting-screen" class="ide-loading-screen">
+  <div class="ide-loading-card">
+    <p class="ide-title">ARKware IDE</p>
+    <p class="ide-status" id="ide-starting-status">Starting the local IDE backend...</p>
+  </div>
+</div>
+
+<div id="ide-failed-screen" class="ide-loading-screen is-hidden">
+  <div class="ide-loading-card ide-failed-card">
+    <div class="ide-failed-icon" aria-hidden="true">
+      <img src="assets/backend-failed.png" alt="" />
+    </div>
+    <p class="ide-title">Backend Unreachable</p>
+    <p class="ide-status">The local IDE backend couldn't be started.</p>
+    <p class="ide-failed-reason" id="ide-failed-reason"></p>
+    <button type="button" class="ide-retry-button" id="ide-retry-button">Try Again</button>
+  </div>
+</div>
+
 <script src="arklight.js" defer></script>
 </body>
 </html>

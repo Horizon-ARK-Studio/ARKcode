@@ -47,8 +47,74 @@ Template:
   Additional information.
 -->
 
-_(No code yet -- Stage 0. First entries land once v1 (Android)
-implementation starts.)_
+### BUG-0001: App crashes ~5-15s after launch when IdeBackendService fails to start
+- **Status:** `FIXED (pending build/device verification)`
+- **Found:** 2026-09-03
+- **Stage:** `v1 (Android)`
+- **Location:** `android-project/app/src/main/java/com/arkware/ide/backend/IdeBackendService.kt:157` (`launchNode`), `android-project/app/src/main/java/com/arkware/ide/MainActivity.kt:262` (`startAndBindBackend`)
+- **Severity:** `Critical`
+
+- **Description:**
+  `MainActivity.startAndBindBackend()` calls `ContextCompat.startForegroundService()`,
+  which obligates the service to call `Service.startForeground()` within
+  a few seconds. `IdeBackendService.launchNode()` only called
+  `promoteToForeground()` (which calls `startForeground()`) after the
+  Node process reported a bound port on stdout. Every failure path in
+  `launchNode()` (missing `libnode.so`, missing `code-server` server
+  bundle, exec failure) returned via `fail()` before ever reaching that
+  point.
+
+- **Expected:**
+  The app stays alive and shows a clear failure state when the backend
+  can't start.
+
+- **Actual:**
+  The OS kills the whole app process with
+  `ForegroundServiceDidNotStartInTimeException: Context.startForegroundService()
+  did not then call Service.startForeground()`, which surfaces to the
+  user as an unexplained crash ~5-15 seconds after launch.
+
+- **Reproduction:**
+  1. Build and install this checkout as-is (only the workbench frontend
+     is vendored; `assets/code-server/out/node/entry.js` does not
+     exist).
+  2. Launch the app.
+  3. Wait ~5-15 seconds -- the app crashes.
+
+- **Likely cause:**
+  `startForeground()` was only reachable from the success path
+  (`watchStdoutForPort()` finding a port), so any early failure in
+  `launchNode()` left the service's foreground promise unfulfilled.
+
+- **Fix:**
+  `launchNode()` now calls `promoteToForegroundStarting()` (a new method
+  that calls `startForeground()` with an "indeterminate" notification)
+  as its first statement, before any of the checks that can fail.
+  `fail()` now calls `stopForeground(true)` once that promise is
+  already satisfied, since there is nothing left running to keep a
+  persistent notification for. `IdeBackendState.Failed` is also now
+  surfaced in the WebView itself (see `MainActivity.onBackendState()` /
+  `assets/index.html`'s `#ide-failed-screen` / `assets/arklight.js`'s
+  `window.ArkBackend`) with a working "Try Again" button
+  (`ArkNativeBridge.retryBackend()`), instead of only being logged.
+
+- **Test:**
+  Rebuild and reinstall on-device; confirm the app no longer crashes
+  when `launchNode()` hits the (still-expected, per this service's own
+  class doc) "entry.js missing" branch, and that the failure screen
+  with a working "Try Again" button appears instead.
+
+- **Notes:**
+  This does not fix backend startup itself -- `code-server`'s
+  server-side `out/node/` bundle still needs its own vendoring pass
+  (see `IdeBackendService.kt`'s class doc and
+  `VSCODE-IDE-IMPLEMENTATION-PLAN.md` section 5b/node-pty) before the
+  backend can actually reach `Ready`. This bug is specifically about
+  the app surviving and communicating that failure instead of being
+  killed by the OS.
+  `assets/backend-failed.png`, used by the new failure screen, is a
+  generated placeholder graphic (not final art) -- swap it for real
+  artwork before shipping.
 
 ---
 
