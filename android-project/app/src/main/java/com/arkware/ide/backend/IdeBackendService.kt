@@ -57,6 +57,15 @@ import kotlinx.coroutines.flow.StateFlow
  *     server bundle too, [launchNode] will always hit the
  *     "entry.js missing" branch on-device.
  *
+ *  Even once both artifacts are vendored, [REQUIRED_NATIVE_LIBS]
+ *  covers a third gap found while chasing BUG-0002: `libnode.so`
+ *  itself dynamically links against 8 shared libraries no stock
+ *  Android device ships and this repo doesn't vendor yet either
+ *  (`readelf -d jniLibs/<abi>/libnode.so`'s NEEDED entries) --
+ *  [launchNode] checks for them explicitly and fails with their exact
+ *  names rather than letting the dynamic linker's abort surface only
+ *  as an unexplained "exited before reporting a port".
+ *
  * ## Why the stdout/stderr readers are plain `Thread`s, not coroutines
  *
  * `Process#getInputStream()`/`getErrorStream()` are blocking streams
@@ -77,6 +86,15 @@ class IdeBackendService : Service() {
     private var nodeProcess: Process? = null
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
+
+    // Bounded ring of the child process's most recent stderr lines
+    // (see BUG-0002 in docs/bugs-caught/README.md) -- populated by
+    // drainStderr(), read by launchNode() when watchStdoutForPort()
+    // ends without ever seeing a port, so the *actual* native failure
+    // (e.g. a dynamic-linker "library not found" abort) reaches
+    // IdeBackendState.Failed's reason instead of only Logcat.
+    private val stderrTail = ArrayDeque<String>()
+    private val stderrTailLock = Any()
 
     private val _state = MutableStateFlow<IdeBackendState>(IdeBackendState.Starting)
     val state: StateFlow<IdeBackendState> get() = _state
@@ -182,6 +200,34 @@ class IdeBackendService : Service() {
             return
         }
 
+        // See BUG-0002 in docs/bugs-caught/README.md: libnode.so is a
+        // Termux-built binary dynamically linked against these shared
+        // libraries (verified via `readelf -d libnode.so`'s NEEDED
+        // entries), none of which exist on stock Android or ship
+        // alongside libnode.so in jniLibs/<abi>/ today. Checking for
+        // them explicitly, before ever attempting exec, turns a
+        // cryptic dynamic-linker abort inside the child process (only
+        // visible today via drainStderr()'s Logcat output, never
+        // surfaced to IdeBackendState.Failed) into a specific,
+        // actionable failure reason naming exactly which files are
+        // missing. libc.so/libm.so/libdl.so are deliberately excluded
+        // from this list -- those are Android's own bionic libc,
+        // always present, not something this app vendors.
+        val missingDeps = REQUIRED_NATIVE_LIBS.filterNot {
+            File(applicationInfo.nativeLibraryDir, it).exists()
+        }
+        if (missingDeps.isNotEmpty()) {
+            fail(
+                "libnode.so is missing ${missingDeps.size} required shared librar" +
+                    (if (missingDeps.size == 1) "y" else "ies") +
+                    " under ${applicationInfo.nativeLibraryDir}: ${missingDeps.joinToString(", ")} " +
+                    "-- these need to be vendored alongside libnode.so as jniLibs/<abi>/<name> " +
+                    "(same Termux nodejs-lts build as libnode.so itself, plan section 5b) before " +
+                    "this can start for real",
+            )
+            return
+        }
+
         val codeServerRoot = File(filesDir, "code-server")
         try {
             extractAssetsOnce(codeServerRoot)
@@ -225,21 +271,13 @@ class IdeBackendService : Service() {
             ProcessBuilder(command)
                 .directory(codeServerRoot)
                 .apply {
-                    // libnode.so is a Termux-built binary: its baked-in
-                    // DT_RUNPATH points at /data/data/com.termux/files/usr/lib,
-                    // a path that does not exist in this app's sandbox, so
-                    // the dynamic linker's default search will not find
-                    // libnode.so's shared-library dependencies there.
-                    // Pointing LD_LIBRARY_PATH at this app's own
-                    // nativeLibraryDir means: IF those dependencies are
-                    // ever vendored alongside libnode.so under the same
-                    // jniLibs/<abi>/ directory, the linker finds them
-                    // there instead. It does NOT mean they are vendored
-                    // yet -- as of this build they are not (see
-                    // jniLibs/arm64-v8a/'s own contents), so this exec
-                    // is still expected to fail at dynamic-link time with
-                    // an unresolved-library error until that follow-up
-                    // vendoring happens.
+                    // libnode.so's baked-in DT_RUNPATH points at
+                    // /data/data/com.termux/files/usr/lib, which does not
+                    // exist in this app's sandbox -- pointing
+                    // LD_LIBRARY_PATH at this app's own nativeLibraryDir
+                    // instead is what lets the linker find
+                    // REQUIRED_NATIVE_LIBS there, now that the check above
+                    // has already confirmed they're actually present.
                     environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
                 }
                 .start()
@@ -293,7 +331,18 @@ class IdeBackendService : Service() {
             }
         }
         if (!reportedReady && running.get()) {
-            fail("node process exited before ever reporting a bound port")
+            // Give drainStderr() a brief window to finish draining
+            // whatever the child wrote before it exited -- both
+            // streams close around the same time the process dies,
+            // but there's no ordering guarantee between them.
+            stderrThread?.join(STDERR_DRAIN_JOIN_MS)
+            val tail = synchronized(stderrTailLock) { stderrTail.joinToString("\n") }
+            val reason = if (tail.isBlank()) {
+                "node process exited before ever reporting a bound port"
+            } else {
+                "node process exited before ever reporting a bound port; last stderr output:\n$tail"
+            }
+            fail(reason)
         }
     }
 
@@ -302,7 +351,12 @@ class IdeBackendService : Service() {
             BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
                 var line: String? = null
                 while (reader.readLine().also { line = it } != null) {
-                    ArkLogger.w(tag = NODE_LOG_TAG, message = line ?: "")
+                    val text = line ?: ""
+                    ArkLogger.w(tag = NODE_LOG_TAG, message = text)
+                    synchronized(stderrTailLock) {
+                        stderrTail.addLast(text)
+                        while (stderrTail.size > STDERR_TAIL_MAX_LINES) stderrTail.removeFirst()
+                    }
                 }
             }
         } catch (e: IOException) {
@@ -415,9 +469,28 @@ class IdeBackendService : Service() {
         private const val EXTRACTED_MARKER = ".extracted"
         private const val SHUTDOWN_GRACE_MS = 3_000L
         private const val THREAD_JOIN_TIMEOUT_MS = 2_000L
+        private const val STDERR_DRAIN_JOIN_MS = 500L
+        private const val STDERR_TAIL_MAX_LINES = 20
         private const val NOTIFICATION_CHANNEL_ID = "ide_backend"
         private const val NOTIFICATION_ID = 1001
         private const val NODE_LOG_TAG = "IdeBackendService.node"
         private val PORT_LOG_PATTERN = Regex("""127\.0\.0\.1:(\d+)""")
+
+        /**
+         * libnode.so's NEEDED entries (`readelf -d jniLibs/arm64-v8a/libnode.so`),
+         * minus libc.so/libm.so/libdl.so -- those three are Android's
+         * own bionic libc, always present on-device, never vendored by
+         * this app. See BUG-0002 in docs/bugs-caught/README.md.
+         */
+        private val REQUIRED_NATIVE_LIBS = listOf(
+            "libz.so.1",
+            "libcares.so",
+            "libsqlite3.so",
+            "libcrypto.so.3",
+            "libssl.so.3",
+            "libicui18n.so.78",
+            "libicuuc.so.78",
+            "libc++_shared.so",
+        )
     }
 }
