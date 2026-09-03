@@ -40,6 +40,32 @@ Status: **draft, Node/code-server sourcing intentionally open (§5)**
 > everything it still takes to turn this recipe into an actual binary
 > -- vendoring the recipe is sourcing only, not a build step; nothing
 > in this patch invokes it.
+>
+> **Progress note (this patch):** `IdeBackendService` now execs for
+> real per §4.2 (`ProcessBuilder` against
+> `nativeLibraryDir/libnode.so` running `filesDir/code-server/out/node/entry.js`,
+> stdout scanned for the bound port, `Process.destroy()`/
+> `destroyForcibly()` wired into `onDestroy()` per §4.5) instead of the
+> placeholder `ServerSocket` Phase 1 left behind -- but it still fails
+> loudly into `IdeBackendState.Failed` on-device today, for two
+> reasons neither this patch nor any CI step in this repo resolves:
+> `libnode.so` has no built binary yet (§5(b)'s recipe is vendored,
+> not run -- that build needs a real NDK + host LLVM toolchain and, per
+> the recipe's own `build.sh` comment, takes on the order of hours per
+> ABI), and `scripts/vendor-code-server.sh` only ever fetches
+> `code-server`'s platform-independent *workbench* frontend, never its
+> server-side `out/node/` bundle (deliberately -- see that script's own
+> header on the linux-x64 `node-pty` addon being a separate, §4's
+> Phase-4 problem). `app/build.gradle.kts` gained the
+> `packaging { jniLibs { useLegacyPackaging = true } }` + `abiFilters`
+> wiring §4.1 needs for whichever binary eventually lands there. §6's
+> SAF workspace picker landed in full: `WorkspaceManager` (new
+> `workspace/` package) owns persisted-`Uri` + newer-or-missing
+> copy-in/copy-out against `filesDir/workspace/`, and `MainActivity`
+> gained the `OpenDocumentTree()` launcher plus an always-available
+> overlay button (the `NoActionBar` theme rules out a menu-bar entry
+> point) and syncs in before every backend start / out on every
+> `onStop()`.
 
 This plan replaces ARKware's current `vscode` flavor -- which just
 points the shell at the *remote* `vscode.dev` SPA, per

@@ -13,6 +13,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+
+        // vendor/termux-packages/nodejs-lts/ (plan section 5b) only
+        // ever produces a libnode.so for these three ABIs -- see
+        // VSCODE-IDE-IMPLEMENTATION-PLAN.md section 4.1's jniLibs
+        // layout. Restricting here keeps Gradle from expecting a
+        // libnode.so for an ABI nothing in this repo builds for.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     // Signing config (keystore path/passwords) is the project owner's
@@ -65,6 +74,22 @@ android {
     buildFeatures {
         viewBinding = false
     }
+
+    packaging {
+        jniLibs {
+            // IdeBackendService execs libnode.so via ProcessBuilder,
+            // not System.loadLibrary -- that only works against a
+            // real extracted file at ApplicationInfo.nativeLibraryDir,
+            // which AGP's default "run from APK" native-lib loading
+            // (useLegacyPackaging = false) does not guarantee. Plan
+            // section 4.1: any vendored native binary ships under
+            // jniLibs specifically so PackageManager extracts it with
+            // exec permission preserved -- useLegacyPackaging = true
+            // (equivalent to the old manifest android:extractNativeLibs="true")
+            // is what actually makes that extraction happen.
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
@@ -88,4 +113,8 @@ dependencies {
     // in plain androidx.lifecycle:lifecycle-runtime (which appcompat
     // already pulls in transitively).
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    // WorkspaceManager's SAF sync (plan section 6): wraps the picked
+    // tree's content:// Uri with a File-like list/create/find API
+    // that java.io.File can't offer against SAF on its own.
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }
