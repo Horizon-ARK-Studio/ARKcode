@@ -2,8 +2,29 @@
 #
 # Fetches the pinned code-server release, verifies its checksum, and
 # extracts *only* the platform-independent VS Code workbench frontend
-# (out/vs/, out/media/, nls*.json, product.json, LICENSE,
-# ThirdPartyNotices.txt) into app/src/main/assets/code-server/workbench/.
+# (out/vs/, out/media/, nls*.json, product.json, package.json, LICENSE,
+# ThirdPartyNotices.txt) into
+# app/src/main/assets/code-server/lib/vscode/.
+#
+# BUG-CAUGHT (see docs/bugs-caught/): this used to land at
+# assets/code-server/workbench/{vs,media,...} -- a flat "workbench/"
+# prefix that has no relationship to where the actual server process
+# looks for it. code-server's own out/node/constants.js computes
+# `vsRootPath = path.join(rootPath, "lib/vscode")` (rootPath being two
+# directories up from out/node/, i.e. codeServerRoot itself), and
+# out/node/main.js loads the compiled server bundle from
+# `${vsRootPath}/out/server-main.js`, reads
+# `${vsRootPath}/package.json` for the reported version, and serves
+# the workbench static assets from `${vsRootPath}/out/vs` +
+# `${vsRootPath}/out/media`. None of that is configurable from the
+# CLI flags IdeBackendService passes -- it's baked into the release's
+# own path arithmetic. So the workbench MUST land at
+# `codeServerRoot/lib/vscode/out/{vs,media,...}`, matching the
+# release tarball's own internal layout exactly, not a
+# repo-invented `workbench/` shorthand. See
+# scripts/vendor-code-server-server.sh (the server-side companion to
+# this script) for the out/node/ + node_modules/ half of this same
+# layout requirement.
 #
 # Deliberately NOT run automatically as part of a Gradle build, and
 # the extracted output is deliberately NOT committed to this repo:
@@ -52,7 +73,7 @@ CODE_SERVER_SHA256="300ef4e37e469e6368a4673c6a623e1c9ba8a34f42b394fb49c431a8900b
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-DEST="${PROJECT_ROOT}/app/src/main/assets/code-server/workbench"
+DEST="${PROJECT_ROOT}/app/src/main/assets/code-server/lib/vscode"
 CACHE_DIR="${PROJECT_ROOT}/.vendor-cache"
 TARBALL="${CACHE_DIR}/${CODE_SERVER_ASSET}"
 EXTRACT_ROOT_NAME="code-server-${CODE_SERVER_VERSION}-linux-amd64"
@@ -79,15 +100,22 @@ tar -xzf "${TARBALL}" -C "${CACHE_DIR}" \
     "${EXTRACT_ROOT_NAME}/lib/vscode/out/nls.messages.json" \
     "${EXTRACT_ROOT_NAME}/lib/vscode/out/nls.metadata.json" \
     "${EXTRACT_ROOT_NAME}/lib/vscode/product.json" \
+    "${EXTRACT_ROOT_NAME}/lib/vscode/package.json" \
     "${EXTRACT_ROOT_NAME}/LICENSE" \
     "${EXTRACT_ROOT_NAME}/ThirdPartyNotices.txt"
 
 EXTRACTED="${CACHE_DIR}/${EXTRACT_ROOT_NAME}/lib/vscode"
-mv "${EXTRACTED}/out/vs" "${DEST}/vs"
-mv "${EXTRACTED}/out/media" "${DEST}/media"
-mv "${EXTRACTED}/out/nls.messages.json" "${DEST}/nls.messages.json"
-mv "${EXTRACTED}/out/nls.metadata.json" "${DEST}/nls.metadata.json"
+mkdir -p "${DEST}/out"
+mv "${EXTRACTED}/out/vs" "${DEST}/out/vs"
+mv "${EXTRACTED}/out/media" "${DEST}/out/media"
+mv "${EXTRACTED}/out/nls.messages.json" "${DEST}/out/nls.messages.json"
+mv "${EXTRACTED}/out/nls.metadata.json" "${DEST}/out/nls.metadata.json"
 mv "${EXTRACTED}/product.json" "${DEST}/product.json"
+# constants.js reads lib/vscode/package.json for the version it
+# reports; without it code-server silently falls back to "0.0.0"
+# instead of failing, which is a worse failure mode (wrong-but-quiet)
+# than just vendoring the ~2KB file.
+mv "${EXTRACTED}/package.json" "${DEST}/package.json"
 mv "${CACHE_DIR}/${EXTRACT_ROOT_NAME}/LICENSE" "${DEST}/LICENSE.code-server"
 mv "${CACHE_DIR}/${EXTRACT_ROOT_NAME}/ThirdPartyNotices.txt" "${DEST}/ThirdPartyNotices.txt"
 
