@@ -26,6 +26,7 @@ import androidx.webkit.WebViewAssetLoader
 import com.arkware.ide.backend.IdeBackendService
 import com.arkware.ide.backend.IdeBackendState
 import com.arkware.ide.logging.ArkLogger
+import com.arkware.ide.termux.TermuxLibImporter
 import com.arkware.ide.workspace.WorkspaceManager
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Dispatchers
@@ -56,11 +57,21 @@ import org.json.JSONObject
  * is what makes sure [IdeBackendService] always gets a real,
  * already-synced sandbox directory to open -- picked workspace or
  * not -- before it's ever started.
+ *
+ * [openTermuxLibLauncher] is the same SAF pattern applied to
+ * [TermuxLibImporter]: a second, independent `OpenDocumentTree()`
+ * registration that lets the user point at a folder containing
+ * `libnode.so`'s missing shared-library dependencies (e.g. copied out
+ * from a real Termux install via shared storage) and imports them
+ * into this app's own internal storage, where
+ * [IdeBackendService.launchNode] already knows to look. See that
+ * class's doc comment for why this is possible at all.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var workspaceManager: WorkspaceManager
+    private lateinit var termuxLibImporter: TermuxLibImporter
     private var backendService: IdeBackendService? = null
     private var navigatedToBackend = false
     private var lastWorkspaceDir: String? = null
@@ -115,6 +126,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    /**
+     * Separate `OpenDocumentTree()` registration from
+     * [openWorkspaceLauncher] -- an Activity can register as many of
+     * these as it needs, and this one points at an unrelated tree (a
+     * lib folder, not a code workspace), so it gets its own launcher
+     * and its own [TermuxLibImporter] rather than overloading the
+     * workspace one.
+     */
+    private val openTermuxLibLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) {
+                ArkLogger.d(message = "MainActivity: Termux lib folder pick cancelled")
+                return@registerForActivityResult
+            }
+            lifecycleScope.launch {
+                termuxLibImporter.persistTreeUri(uri)
+                val imported = withContext(Dispatchers.IO) { termuxLibImporter.importFrom(uri) }
+                ArkLogger.d(
+                    message = "MainActivity: imported ${imported.size} librar" +
+                        (if (imported.size == 1) "y" else "ies") +
+                        " from $uri: ${imported.joinToString(", ")}",
+                )
+            }
+        }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val bound = (service as IdeBackendService.LocalBinder).service()
@@ -133,6 +169,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         workspaceManager = WorkspaceManager(this)
+        termuxLibImporter = TermuxLibImporter(this)
 
         webView = WebView(this)
         webView.settings.javaScriptEnabled = true
@@ -220,6 +257,25 @@ class MainActivity : AppCompatActivity() {
             setMargins(margin, margin, margin, margin)
         }
         root.addView(openFolderButton, buttonParams)
+
+        // Stacked directly above the workspace button (same corner,
+        // pushed up by its own height + margin) rather than a second
+        // layout region -- this theme has no action bar (see class
+        // doc), and this feature doesn't warrant a bigger layout
+        // change than that.
+        val importLibsButton = MaterialButton(this).apply {
+            text = getString(R.string.import_termux_libs)
+            setOnClickListener { openTermuxLibLauncher.launch(null) }
+        }
+        val stackOffset = (48 * resources.displayMetrics.density).toInt()
+        val importLibsButtonParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.END
+            setMargins(margin, margin, margin, margin + stackOffset)
+        }
+        root.addView(importLibsButton, importLibsButtonParams)
         return root
     }
 

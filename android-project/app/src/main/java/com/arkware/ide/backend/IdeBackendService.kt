@@ -10,6 +10,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.arkware.ide.R
 import com.arkware.ide.logging.ArkLogger
+import com.arkware.ide.termux.TermuxLibImporter
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
@@ -64,7 +65,13 @@ import kotlinx.coroutines.flow.StateFlow
  *  (`readelf -d jniLibs/<abi>/libnode.so`'s NEEDED entries) --
  *  [launchNode] checks for them explicitly and fails with their exact
  *  names rather than letting the dynamic linker's abort surface only
- *  as an unexplained "exited before reporting a port".
+ *  as an unexplained "exited before reporting a port". As of this
+ *  change that check (and the `LD_LIBRARY_PATH` [launchNode] builds)
+ *  looks in two places, not just `nativeLibraryDir`:
+ *  [TermuxLibImporter.importDir] is searched too, so libraries the
+ *  user has imported at runtime via that class's SAF picker (see
+ *  MainActivity.kt) satisfy this requirement exactly as well as ones
+ *  vendored into `jniLibs/<abi>/` at build time would.
  *
  * ## Why the stdout/stderr readers are plain `Thread`s, not coroutines
  *
@@ -203,27 +210,38 @@ class IdeBackendService : Service() {
         // See BUG-0002 in docs/bugs-caught/README.md: libnode.so is a
         // Termux-built binary dynamically linked against these shared
         // libraries (verified via `readelf -d libnode.so`'s NEEDED
-        // entries), none of which exist on stock Android or ship
-        // alongside libnode.so in jniLibs/<abi>/ today. Checking for
-        // them explicitly, before ever attempting exec, turns a
-        // cryptic dynamic-linker abort inside the child process (only
-        // visible today via drainStderr()'s Logcat output, never
-        // surfaced to IdeBackendState.Failed) into a specific,
-        // actionable failure reason naming exactly which files are
-        // missing. libc.so/libm.so/libdl.so are deliberately excluded
-        // from this list -- those are Android's own bionic libc,
-        // always present, not something this app vendors.
-        val missingDeps = REQUIRED_NATIVE_LIBS.filterNot {
-            File(applicationInfo.nativeLibraryDir, it).exists()
+        // entries), none of which exist on stock Android. Two places
+        // are searched for them, mirroring the two entries put on
+        // LD_LIBRARY_PATH below: jniLibs/<abi>/ (vendored at build
+        // time) and TermuxLibImporter.importDir (imported at runtime
+        // via the SAF picker in MainActivity.kt, e.g. pointed at a
+        // real Termux install's usr/lib). Checking for them
+        // explicitly, before ever attempting exec, turns a cryptic
+        // dynamic-linker abort inside the child process (only visible
+        // today via drainStderr()'s Logcat output, never surfaced to
+        // IdeBackendState.Failed) into a specific, actionable failure
+        // reason naming exactly which files are missing and where
+        // this looked for them. libc.so/libm.so/libdl.so are
+        // deliberately excluded from this list -- those are
+        // Android's own bionic libc, always present, not something
+        // this app vendors or imports.
+        val nativeLibSearchDirs = listOf(
+            File(applicationInfo.nativeLibraryDir),
+            TermuxLibImporter(this).importDir,
+        )
+        val missingDeps = REQUIRED_NATIVE_LIBS.filterNot { name ->
+            nativeLibSearchDirs.any { dir -> File(dir, name).exists() }
         }
         if (missingDeps.isNotEmpty()) {
             fail(
                 "libnode.so is missing ${missingDeps.size} required shared librar" +
                     (if (missingDeps.size == 1) "y" else "ies") +
-                    " under ${applicationInfo.nativeLibraryDir}: ${missingDeps.joinToString(", ")} " +
-                    "-- these need to be vendored alongside libnode.so as jniLibs/<abi>/<name> " +
-                    "(same Termux nodejs-lts build as libnode.so itself, plan section 5b) before " +
-                    "this can start for real",
+                    ": ${missingDeps.joinToString(", ")} -- not found under any of " +
+                    "${nativeLibSearchDirs.joinToString(", ") { it.absolutePath }}. Either " +
+                    "vendor them alongside libnode.so as jniLibs/<abi>/<name> (same Termux " +
+                    "nodejs-lts build as libnode.so itself, plan section 5b), or import them " +
+                    "at runtime via the folder picker (e.g. pointed at a real Termux install's " +
+                    "usr/lib) before this can start for real",
             )
             return
         }
@@ -273,12 +291,16 @@ class IdeBackendService : Service() {
                 .apply {
                     // libnode.so's baked-in DT_RUNPATH points at
                     // /data/data/com.termux/files/usr/lib, which does not
-                    // exist in this app's sandbox -- pointing
-                    // LD_LIBRARY_PATH at this app's own nativeLibraryDir
-                    // instead is what lets the linker find
-                    // REQUIRED_NATIVE_LIBS there, now that the check above
-                    // has already confirmed they're actually present.
-                    environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
+                    // exist in this app's sandbox. The dynamic linker
+                    // only consults DT_RUNPATH *after* LD_LIBRARY_PATH,
+                    // so pointing LD_LIBRARY_PATH at nativeLibSearchDirs
+                    // instead is what lets it find REQUIRED_NATIVE_LIBS
+                    // there -- in either this app's own nativeLibraryDir
+                    // or TermuxLibImporter's runtime-imported dir --
+                    // now that the check above has already confirmed
+                    // they're actually present in at least one of them.
+                    environment()["LD_LIBRARY_PATH"] =
+                        nativeLibSearchDirs.joinToString(":") { it.absolutePath }
                 }
                 .start()
         } catch (e: IOException) {
