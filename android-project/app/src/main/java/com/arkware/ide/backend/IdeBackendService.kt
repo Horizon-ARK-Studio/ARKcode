@@ -198,6 +198,24 @@ class IdeBackendService : Service() {
         val process = try {
             ProcessBuilder(command)
                 .directory(codeServerRoot)
+                .apply {
+                    // libnode.so is a Termux-built binary: its baked-in
+                    // DT_RUNPATH points at /data/data/com.termux/files/usr/lib,
+                    // a path that does not exist in this app's sandbox, so
+                    // the dynamic linker's default search will not find
+                    // libnode.so's shared-library dependencies there.
+                    // Pointing LD_LIBRARY_PATH at this app's own
+                    // nativeLibraryDir means: IF those dependencies are
+                    // ever vendored alongside libnode.so under the same
+                    // jniLibs/<abi>/ directory, the linker finds them
+                    // there instead. It does NOT mean they are vendored
+                    // yet -- as of this build they are not (see
+                    // jniLibs/arm64-v8a/'s own contents), so this exec
+                    // is still expected to fail at dynamic-link time with
+                    // an unresolved-library error until that follow-up
+                    // vendoring happens.
+                    environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
+                }
                 .start()
         } catch (e: IOException) {
             fail("failed to exec libnode.so: ${e.message}")
