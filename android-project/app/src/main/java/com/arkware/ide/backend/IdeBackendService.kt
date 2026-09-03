@@ -226,7 +226,7 @@ class IdeBackendService : Service() {
         var reportedReady = false
         try {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                var line: String?
+                var line: String? = null
                 while (running.get() && reader.readLine().also { line = it } != null) {
                     val text = line ?: continue
                     ArkLogger.d(tag = NODE_LOG_TAG, message = text)
@@ -256,7 +256,7 @@ class IdeBackendService : Service() {
     private fun drainStderr(process: Process) {
         try {
             BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
-                var line: String?
+                var line: String? = null
                 while (reader.readLine().also { line = it } != null) {
                     ArkLogger.w(tag = NODE_LOG_TAG, message = line ?: "")
                 }
