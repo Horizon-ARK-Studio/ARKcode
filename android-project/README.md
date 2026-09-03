@@ -18,23 +18,17 @@ not yet implemented as of this scaffold's version.)
 ## Building without a local JDK
 
 This project includes `.github/workflows/android-build.yml` (Stages
-2, 3, and 4 of the design doc above) -- push it to GitHub, or open a
+2 and 3 of the design doc above) -- push it to GitHub, or open a
 pull request against it, and it: builds a debug APK on GitHub's own
 runners and attaches it to the workflow run as a downloadable
-artifact, installs and launches that APK on a throwaway emulator on
-that same runner to confirm it doesn't crash immediately on startup,
-and separately builds a release APK (also attached as a downloadable
-artifact). Nothing to configure for the debug build or the smoke test;
-no JDK, Android SDK, or emulator/device needed on your own machine for
-either.
+artifact, and installs and launches that APK on a throwaway emulator on
+that same runner to confirm it doesn't crash immediately on startup.
+Nothing to configure for either; no JDK, Android SDK, or
+emulator/device needed on your own machine for either job.
 
-The release build is unsigned unless you add
-`RELEASE_KEYSTORE_BASE64` (your keystore file, base64-encoded),
-`RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and
-`RELEASE_KEY_PASSWORD` as secrets in this repo's Settings -> Secrets
-and variables -> Actions -- if you do, the workflow decodes and uses
-them to sign the APK; if not, the job still succeeds and gives you an
-unsigned APK you can sign yourself later.
+There is no release-build job in this workflow -- run
+`./gradlew assembleRelease` yourself (locally, or in a workflow you
+add back) when you're ready to produce a signed release build.
 
 ## What's here
 
@@ -52,12 +46,11 @@ unsigned APK you can sign yourself later.
   https://github.com/Rae-ARK/ARKlight-Viewer-for-Android-Devices)
   (Apache-2.0). Unused by the default unpacked-tree setup above; kept
   in case you want to swap in a sealed `.ark` bundle by hand later.
-- `.github/workflows/android-build.yml` -- builds a debug APK,
-  smoke-tests it (install + launch), and builds a release APK, all on
-  GitHub-hosted runners on every push/PR (see "Building without a
-  local JDK" above). Edit or delete it freely; it's a normal,
-  hand-editable workflow file, not something ARKlight regenerates in
-  place.
+- `.github/workflows/android-build.yml` -- builds a debug APK and
+  smoke-tests it (install + launch), on GitHub-hosted runners on every
+  push/PR (see "Building without a local JDK" above). Edit or delete
+  it freely; it's a normal, hand-editable workflow file, not something
+  ARKlight regenerates in place.
 
 ## Custom launcher icon
 
