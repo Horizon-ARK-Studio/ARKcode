@@ -8,7 +8,13 @@ name: Android build
 # all of it lives on the runner.
 on:
   push:
-    branches: [main]
+    # main is this repo's default branch, but all of this project's
+    # actual work has been happening on app -- branches: [main] alone
+    # meant every push here since this workflow moved to the repo
+    # root (4c287cc) silently never triggered a run. Add app so
+    # pushes here actually fire the workflow; keep main too so it
+    # still fires once/if this branch gets merged there.
+    branches: [main, app]
   pull_request:
   workflow_dispatch:
 
