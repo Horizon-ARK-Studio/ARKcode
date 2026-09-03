@@ -4,7 +4,11 @@
 # the platform-independent VS Code *workbench* frontend
 # (lib/vscode/out/vs, out/media, ...). THIS script vendors the
 # server-side half needed to actually run code-server as a process --
-# code-server's own out/node/ (entry.js and friends) plus BOTH
+# code-server's own out/node/ (entry.js and friends), out/common/
+# (the emitter/http/util helpers out/node/ reaches into via relative
+# requires -- easy to miss by reading the source tree, which is how
+# this script first shipped without it; only surfaced by actually
+# running entry.js and watching it throw MODULE_NOT_FOUND), plus BOTH
 # node_modules trees it and the bundled VS Code server need
 # (code-server's own top-level node_modules/, and
 # lib/vscode/node_modules/ for the extension host) -- into
@@ -100,6 +104,8 @@ echo "vendor-code-server-server: extracting server-side bundle"
 # overlap (and so re-running one doesn't clobber the other's output).
 tar -xzf "${TARBALL}" -C "${CACHE_DIR}" \
     "${EXTRACT_ROOT_NAME}/out/node" \
+    "${EXTRACT_ROOT_NAME}/out/common" \
+    "${EXTRACT_ROOT_NAME}/package.json" \
     "${EXTRACT_ROOT_NAME}/node_modules" \
     "${EXTRACT_ROOT_NAME}/lib/vscode/out/server-main.js" \
     "${EXTRACT_ROOT_NAME}/lib/vscode/out/server-cli.js" \
@@ -122,6 +128,32 @@ mkdir -p "${DEST}/out" "${DEST}/lib/vscode/out"
 # maps, dead weight on a device build.
 mv "${EXTRACTED}/out/node" "${DEST}/out/node"
 find "${DEST}/out/node" -name '*.js.map' -delete
+
+# out/common/: NOT vendored until this line -- caught by actually
+# executing entry.js against this script's own output (running node
+# on the extracted tree, not just reading the script back), which
+# throws `Cannot find module '../common/http'` from vscodeSocket.js
+# before the server even gets to arg parsing. out/node/*.js and
+# out/node/routes/*.js reach into ../common/{emitter,http,util}.js
+# (relative requires, so this path is load-bearing, not optional) at
+# 16 require sites across 8 out/node files. Those 3 files' own only
+# external dependency is @coder/logger, already covered by the
+# node_modules/ move below -- no further transitive gap behind this
+# one.
+mv "${EXTRACTED}/out/common" "${DEST}/out/common"
+find "${DEST}/out/common" -name '*.js.map' -delete
+
+# package.json: code-server's OWN top-level manifest -- distinct from
+# lib/vscode/package.json (vendor-code-server.sh's job, read by
+# constants.js for the *editor's* reported version). This one lands
+# at codeServerRoot/package.json itself and is what out/node/
+# wrapper.js does `require("../../package.json")` for (its own
+# reported version/name, used in startup logging). Missing this
+# doesn't fail at module-load time like the out/common/ gap above --
+# it fails one require() deeper, inside wrapper.js, right after
+# out/common/ is fixed. Same discovery method: only surfaced by
+# actually running entry.js past the first fix, not by reading source.
+mv "${CACHE_DIR}/${EXTRACT_ROOT_NAME}/package.json" "${DEST}/package.json"
 
 # node_modules/: code-server's own top-level deps.
 mv "${EXTRACTED}/node_modules" "${DEST}/node_modules"
