@@ -12,6 +12,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+# settings.gradle.kts / build.gradle.kts / app/ all live under
+# android-project/, not the repo root -- every `run:` step below
+# needs to execute there, or there's no Gradle build for `gradle` to
+# find at all.
+defaults:
+  run:
+    working-directory: android-project
+
 jobs:
   assemble-debug:
     name: Assemble debug APK
@@ -38,7 +46,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ARKware-IDE-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: android-project/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
   install-launch-smoke-test:
