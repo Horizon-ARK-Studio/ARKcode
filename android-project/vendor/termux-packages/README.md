@@ -1,10 +1,14 @@
 # Vendored: termux-packages' `nodejs-lts` build recipe
 
-**Status: reference material only. Nothing under `vendor/` is invoked by
-any Gradle task, script, or CI job in this project yet.** This is
-sourcing for `VSCODE-IDE-IMPLEMENTATION-PLAN.md` section 5 option
-(b), not a working build step -- see "What integration will actually
-require" below for exactly what's missing before it could become one.
+**Status: `.github/workflows/build-libnode.yml` (manual dispatch only
+-- see that file's own comments for why) now actually runs this
+recipe, inside termux-packages' own Docker build environment, and
+uploads the resulting Node binary per ABI as a workflow artifact.**
+That workflow does *not* commit the result anywhere or wire it into
+`android-build.yml`'s Gradle build -- see items 2-4 under "What
+integration will actually require" below, which are still open. This
+was sourcing for `VSCODE-IDE-IMPLEMENTATION-PLAN.md` section 5 option
+(b); see that section for why (b) was picked over (a).
 
 ## What this is
 
@@ -37,17 +41,18 @@ likely reworked) from scratch.
   is the *recipe*, run once, offline, against this project's own
   eventual build infrastructure -- never Termux's installed binaries
   themselves.
-- **Not runnable as-is.** `build.sh` is one package recipe within
+- **Not runnable standalone.** `build.sh` is one package recipe within
   termux-packages' larger build system -- it calls shared functions
   (`termux_setup_ninja`, `termux_download`, `termux_step_*` hooks)
   that live in that repo's `build-package.sh`/`scripts/build/`, none
-  of which are vendored here. Running this recipe for real means
-  either running it inside termux-packages' own build environment
-  (their Docker container, via their `./scripts/run-docker.sh` +
-  `./build-package.sh nodejs-lts`) and taking the resulting binary
-  out, or reimplementing just enough of the calling convention to run
-  `build.sh` standalone -- an actual decision either way, not made by
-  this commit.
+  of which are vendored here. `.github/workflows/build-libnode.yml`
+  now runs it the way this section originally described as the real
+  option: inside termux-packages' own Docker build environment (their
+  `./scripts/run-docker.sh` + `./build-package.sh -I -a <arch>
+  nodejs-lts`, pinned to the termux-packages commit this recipe was
+  copied from), taking the resulting binary out of the built `.deb`.
+  Nobody has reimplemented `build.sh`'s calling convention standalone,
+  nor should that be necessary now that the Docker route is wired up.
 - **Not the same as this project's own prefix.** `build.sh` configures
   with `--prefix=$TERMUX_PREFIX` (Termux's own
   `/data/data/com.termux/files/usr`). Even a successful build from
@@ -72,11 +77,12 @@ In the order `VSCODE-IDE-IMPLEMENTATION-PLAN.md` section 7's phase
 table implies (Phase 2, "Real Node binary sourced per section 5's
 eventual decision"):
 
-1. A real build environment capable of running this recipe -- either
-   termux-packages' own Docker-based one, or a from-scratch
-   reimplementation of the handful of `termux_step_*` hooks
-   `build.sh` actually calls (host ICU build, host LLVM toolchain
-   fetch, `ninja` invocation, `tools/install.py`).
+1. ~~A real build environment capable of running this recipe~~ --
+   done: `.github/workflows/build-libnode.yml` runs it inside
+   termux-packages' own Docker-based one on a GitHub-hosted runner,
+   manual-dispatch only given the hours-per-ABI cost noted at the top
+   of `nodejs-lts/build.sh`. What it hasn't been is *proven* -- it's
+   only as tested as its first real run.
 2. Re-pointing `--prefix` away from `$TERMUX_PREFIX` at this project's
    own install location, and re-checking every patch in this
    directory for prefix-path assumptions beyond the `configure` line

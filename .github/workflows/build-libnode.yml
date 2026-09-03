@@ -1,0 +1,233 @@
+---
+name: Build libnode.so
+
+# Actually *runs* android-project/vendor/termux-packages/nodejs-lts —
+# see that directory's README.md, "What this is not: not runnable
+# as-is" — inside termux-packages' own Docker build environment, once
+# per ABI this project ships (app/build.gradle.kts' abiFilters:
+# arm64-v8a, armeabi-v7a, x86_64), and uploads the resulting Node
+# binary (renamed libnode.so per VSCODE-IDE-IMPLEMENTATION-PLAN.md
+# section 4.1) as a workflow artifact.
+#
+# Why this is its own workflow, not a job in android-build.yml:
+# nodejs-lts/build.sh's own top-of-file comment says a from-scratch
+# build "takes 2 whole hours... for a single arch" — times three ABIs
+# that's multiple hours, an order of magnitude past what should block
+# every ordinary push/PR. This only runs on manual dispatch.
+#
+# Why this can't run in the sandbox that authored this workflow: it
+# needs a real Android NDK plus the host LLVM toolchain termux-packages
+# downloads itself (see nodejs-lts/build.sh's termux_step_host_build),
+# and that sandbox's network egress allowlist doesn't cover
+# termux-packages' package servers, GitHub raw/codeload, or Google's
+# chromium-browser-clang bucket. GitHub-hosted runners have open
+# internet, so it can run there.
+#
+# What this does NOT do: commit the resulting .so anywhere, or wire it
+# into android-build.yml's Gradle build. libnode.so per ABI easily
+# runs 80-150MB — dropping that into git history via an automated
+# commit is its own decision (Git LFS or a release asset, not a
+# regular commit) that deserves a deliberate choice, not one made
+# silently by a workflow run. Download the artifacts this produces and
+# place them under app/src/main/jniLibs/<abi>/libnode.so by hand (or
+# wire up that automation separately) once you've confirmed a build
+# actually succeeds and the binary runs.
+#
+# Known unknowns, since this has not yet been run for real:
+# - Whether 350 minutes is actually enough. GitHub-hosted runners hard
+#   -cap every job at 360 minutes regardless of plan; if the real
+#   build runs longer than that per ABI, this job gets killed with no
+#   partial-progress artifact and the only fixes are a self-hosted
+#   runner or splitting the recipe's steps (host build / cross build)
+#   across separate jobs with a cache/artifact handoff between them —
+#   not attempted here.
+# - Whether the GitHub-hosted runner's default disk (~14GB free after
+#   the OS/toolchain preinstalls) is enough once ICU, the LLVM host
+#   toolchain tarball, and a full V8 build's object files are all on
+#   disk at once. The "Free up disk space" step below is a best-effort
+#   mitigation, not a guarantee.
+# - Whether the vendored recipe's patches (written against
+#   termux-packages commit 9010030e, see vendor/termux-packages/
+#   README.md) still apply cleanly against that same pinned commit's
+#   build-package.sh infrastructure. Pinning to that exact commit
+#   (rather than termux-packages' master) is deliberate, to keep this
+#   reproducible and to avoid a divergence between "the recipe we
+#   vendored" and "the build system we run it with".
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Which ABI to build (all three takes hours)"
+        type: choice
+        default: all
+        options:
+          - all
+          - aarch64 # -> arm64-v8a
+          - arm # -> armeabi-v7a
+          - x86_64 # -> x86_64
+
+# termux-packages' own build-package.sh recipe format is what's being
+# invoked — this pin is that repo's commit as of vendoring (see
+# vendor/termux-packages/README.md's "Licensing" section for the same
+# hash used there).
+env:
+  TERMUX_PACKAGES_COMMIT: 9010030e71dbb22d8d5fffad8d6e6bc84155a23b
+
+jobs:
+  plan:
+    name: Work out which ABI(s) to build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          FULL='[
+            {"arch":"aarch64","abi":"arm64-v8a"},
+            {"arch":"arm","abi":"armeabi-v7a"},
+            {"arch":"x86_64","abi":"x86_64"}
+          ]'
+          SEL="${{ inputs.arch }}"
+          if [ -z "$SEL" ] || [ "$SEL" = "all" ]; then
+            MATRIX="$(echo "$FULL" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))')"
+          else
+            MATRIX="$(echo "$FULL" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([x for x in d if x['arch']=='$SEL']))")"
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Building for: $MATRIX"
+
+  build-libnode:
+    name: Build libnode.so (${{ matrix.arch }})
+    needs: plan
+    runs-on: ubuntu-latest
+    # Hard runner cap is 360 minutes; leaving a 10-minute margin for
+    # checkout/upload steps either side of the actual recipe.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out ARKcode
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" \
+            2>/dev/null || true
+          docker image prune -a -f || true
+          df -h /
+
+      - name: Clone termux-packages (pinned commit)
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/termux/termux-packages.git termux-packages
+          cd termux-packages
+          if git fetch --depth 1 origin "$TERMUX_PACKAGES_COMMIT"; then
+            git checkout FETCH_HEAD
+          else
+            echo "::warning::Pinned commit $TERMUX_PACKAGES_COMMIT unfetchable, falling back to master — recipe may not match this build system exactly."
+            git fetch --depth 1 origin master
+            git checkout FETCH_HEAD
+          fi
+
+      - name: Overlay the vendored nodejs-lts recipe
+        run: |
+          rm -rf termux-packages/packages/nodejs-lts
+          cp -r android-project/vendor/termux-packages/nodejs-lts \
+            termux-packages/packages/nodejs-lts
+
+      - name: Pull the Termux package builder image
+        working-directory: termux-packages
+        run: docker pull ghcr.io/termux/package-builder:latest
+
+      - name: Run the recipe (host ICU + host LLVM fetch + NDK cross-build)
+        working-directory: termux-packages
+        run: |
+          # -I: download this recipe's TERMUX_PKG_DEPENDS
+          # (libc++, openssl, c-ares, libicu, libsqlite, zlib) as
+          # prebuilt packages from Termux's own repo instead of
+          # building each from source — that's what actually keeps
+          # this to "one recipe's worth of hours" instead of "half of
+          # termux-packages' dependency graph's worth of hours". See
+          # nodejs-lts/build.sh's TERMUX_PKG_DEPENDS line and this
+          # repo's own vendor/termux-packages/README.md point 3, which
+          # flags that those same shared-library deps still need
+          # bundling into jniLibs/ separately at Android-packaging
+          # time — this step doesn't do that; it only produces node
+          # itself.
+          ./scripts/run-docker.sh ./build-package.sh -I -a "${{ matrix.arch }}" nodejs-lts
+
+      - name: Extract the node binary from the built .deb
+        working-directory: termux-packages
+        run: |
+          set -eu
+          DEB="$(find output -maxdepth 1 -name 'nodejs-lts*.deb' | head -n1)"
+          if [ -z "$DEB" ]; then
+            echo "::error::No nodejs-lts*.deb found under termux-packages/output — build likely failed before packaging."
+            find output -maxdepth 1 || true
+            exit 1
+          fi
+          echo "Built package: $DEB"
+          mkdir -p extracted
+          ar x "$DEB" --output=extracted
+          cd extracted
+          # Termux has used xz, zstd, and (rarely) gzip for data.tar.*
+          # across its history — try each rather than assuming one.
+          for CANDIDATE in data.tar.xz data.tar.zst data.tar.gz; do
+            if [ -f "$CANDIDATE" ]; then
+              tar --auto-compress -xf "$CANDIDATE"
+              break
+            fi
+          done
+          NODE_BIN="$(find . -type f -path '*/bin/node' | head -n1)"
+          if [ -z "$NODE_BIN" ]; then
+            echo "::error::data.tar.* extracted but no bin/node inside it."
+            find . -maxdepth 6 || true
+            exit 1
+          fi
+          cp "$NODE_BIN" "../libnode.so"
+          cd ..
+          file libnode.so
+          ls -lh libnode.so "$DEB"
+
+      - name: Upload libnode.so (${{ matrix.abi }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnode.so-${{ matrix.abi }}
+          path: |
+            termux-packages/libnode.so
+            termux-packages/output/nodejs-lts*.deb
+          if-no-files-found: error
+
+  bundle:
+    name: Bundle into a jniLibs/ layout
+    needs: build-libnode
+    if: always() && needs.build-libnode.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every ABI's artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: libnode.so-*
+          path: downloaded
+
+      - name: Arrange as app/src/main/jniLibs/<abi>/libnode.so
+        run: |
+          set -eu
+          mkdir -p jniLibs
+          for DIR in downloaded/libnode.so-*; do
+            ABI="$(basename "$DIR" | sed 's/^libnode.so-//')"
+            mkdir -p "jniLibs/$ABI"
+            cp "$DIR/libnode.so" "jniLibs/$ABI/libnode.so"
+          done
+          find jniLibs -type f -exec ls -lh {} \;
+
+      - name: Upload combined jniLibs bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnode-jniLibs
+          path: jniLibs
+          if-no-files-found: error
