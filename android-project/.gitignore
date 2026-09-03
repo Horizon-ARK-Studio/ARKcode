@@ -5,6 +5,13 @@
 app/src/main/assets/code-server/
 .vendor-cache/
 
+# The repo root's .gitignore has a blanket `*.patch` rule (for scratch/
+# dev patches). vendor/termux-packages/nodejs-lts/*.patch are tracked
+# upstream build patches, not scratch output -- re-include them
+# explicitly so a future plain `git add .` here doesn't silently drop
+# them again the way it would without this line.
+!vendor/termux-packages/nodejs-lts/*.patch
+
 # Standard Gradle/Android
 .gradle/
 build/

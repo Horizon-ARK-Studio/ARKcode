@@ -31,6 +31,15 @@ Status: **draft, Node/code-server sourcing intentionally open (§5)**
 > that expects it to be present -- Phase 3 is what actually wires that
 > directory up to be served, not this patch (see §7's phase table,
 > unchanged).
+>
+> Phase 2 sourcing has one input now too:
+> `android-project/vendor/termux-packages/nodejs-lts/` is
+> termux-packages' own bionic-targeting Node build recipe (§5 option
+> (b)), vendored verbatim for reference. See that directory's own
+> `README.md` for exact provenance/licensing and, importantly, for
+> everything it still takes to turn this recipe into an actual binary
+> -- vendoring the recipe is sourcing only, not a build step; nothing
+> in this patch invokes it.
 
 This plan replaces ARKware's current `vscode` flavor -- which just
 points the shell at the *remote* `vscode.dev` SPA, per
