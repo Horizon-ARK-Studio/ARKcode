@@ -232,9 +232,11 @@ class IdeBackendService : Service() {
             File(applicationInfo.nativeLibraryDir),
             TermuxLibImporter(this).importDir,
         )
-        val missingDeps = REQUIRED_NATIVE_LIBS.filterNot { name ->
-            nativeLibSearchDirs.any { dir -> File(dir, name).exists() }
-        }
+        val missingDeps = REQUIRED_NATIVE_LIBS.filterNot { spec ->
+            nativeLibSearchDirs.any { dir ->
+                dir.listFiles()?.any { spec.pattern.matches(it.name) } == true
+            }
+        }.map { it.label }
         if (missingDeps.isNotEmpty()) {
             fail(
                 "libnode.so is missing ${missingDeps.size} required shared librar" +
@@ -502,20 +504,40 @@ class IdeBackendService : Service() {
         private val PORT_LOG_PATTERN = Regex("""127\.0\.0\.1:(\d+)""")
 
         /**
+         * One entry in [REQUIRED_NATIVE_LIBS]: [label] is what gets
+         * reported in [fail]'s message, [pattern] is what a candidate
+         * filename in [nativeLibSearchDirs] must fully match.
+         */
+        private data class NativeLibSpec(val label: String, val pattern: Regex) {
+            constructor(exactName: String) : this(exactName, Regex(Regex.escape(exactName)))
+        }
+
+        /**
          * libnode.so's NEEDED entries (`readelf -d jniLibs/arm64-v8a/libnode.so`),
          * minus libc.so/libm.so/libdl.so -- those three are Android's
          * own bionic libc, always present on-device, never vendored by
          * this app. See BUG-0002 in docs/bugs-caught/README.md.
+         *
+         * libicui18n/libicuuc are matched by a version-suffix pattern
+         * rather than an exact filename: Termux's `libicu` package is
+         * a rolling release (ICU bumps its SONAME roughly twice a
+         * year), and `scripts/vendor-termux-libs.sh` already vendors
+         * whatever version is current at fetch time rather than a
+         * pinned one (see that script's own header). A hardcoded
+         * `.so.78` here previously caused this preflight check to
+         * report a false "missing" once Termux's actual ICU version
+         * moved past 78, even though a valid (newer) file was present
+         * under a different name.
          */
         private val REQUIRED_NATIVE_LIBS = listOf(
-            "libz.so.1",
-            "libcares.so",
-            "libsqlite3.so",
-            "libcrypto.so.3",
-            "libssl.so.3",
-            "libicui18n.so.78",
-            "libicuuc.so.78",
-            "libc++_shared.so",
+            NativeLibSpec("libz.so.1"),
+            NativeLibSpec("libcares.so"),
+            NativeLibSpec("libsqlite3.so"),
+            NativeLibSpec("libcrypto.so.3"),
+            NativeLibSpec("libssl.so.3"),
+            NativeLibSpec("libicui18n.so.<ver>", Regex("""libicui18n\.so\.\d+""")),
+            NativeLibSpec("libicuuc.so.<ver>", Regex("""libicuuc\.so\.\d+""")),
+            NativeLibSpec("libc++_shared.so"),
         )
     }
 }

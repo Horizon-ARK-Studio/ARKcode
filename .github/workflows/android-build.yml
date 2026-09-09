@@ -170,7 +170,17 @@ jobs:
             MISSING=1
           fi
 
-          REQUIRED_NATIVE_LIBS="libz.so.1 libcares.so libsqlite3.so libcrypto.so.3 libssl.so.3 libicui18n.so.78 libicuuc.so.78 libc++_shared.so"
+          # icui18n/icuuc are checked via a version-suffix glob, not an
+          # exact filename: Termux's libicu package is a rolling
+          # release (ICU bumps its SONAME roughly twice a year) and
+          # scripts/vendor-termux-libs.sh already vendors whatever
+          # version is current at fetch time. A hardcoded ".so.78"
+          # here previously false-flagged as "missing" once Termux's
+          # actual ICU version moved past 78. Kept in sync by hand with
+          # IdeBackendService.REQUIRED_NATIVE_LIBS, same as the rest of
+          # this list already was.
+          REQUIRED_NATIVE_LIBS_FIXED="libz.so.1 libcares.so libsqlite3.so libcrypto.so.3 libssl.so.3 libc++_shared.so"
+          REQUIRED_NATIVE_LIBS_GLOB="libicui18n.so.* libicuuc.so.*"
           for ABI in arm64-v8a armeabi-v7a x86_64; do
             DIR="app/src/main/jniLibs/$ABI"
             if [ -f "$DIR/libnode.so" ]; then
@@ -179,12 +189,22 @@ jobs:
               echo "- ⬜ $ABI/libnode.so not present (no build-libnode.yml artifact for this ABI yet)" >> "$GITHUB_STEP_SUMMARY"
               continue # no point checking this ABI's shared-lib deps if libnode.so itself isn't there
             fi
-            for LIB in $REQUIRED_NATIVE_LIBS; do
+            for LIB in $REQUIRED_NATIVE_LIBS_FIXED; do
               if [ -f "$DIR/$LIB" ]; then
                 echo "  - ✅ $ABI/$LIB" >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "  - ❌ $ABI/$LIB missing" >> "$GITHUB_STEP_SUMMARY"
                 echo "::warning::$DIR is missing $LIB -- IdeBackendService.launchNode() will fail its REQUIRED_NATIVE_LIBS preflight check for $ABI."
+                MISSING=1
+              fi
+            done
+            for PATTERN in $REQUIRED_NATIVE_LIBS_GLOB; do
+              MATCH="$(find "$DIR" -maxdepth 1 -name "$PATTERN" | head -n1)"
+              if [ -n "$MATCH" ]; then
+                echo "  - ✅ $ABI/$(basename "$MATCH")" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "  - ❌ $ABI/$PATTERN missing" >> "$GITHUB_STEP_SUMMARY"
+                echo "::warning::$DIR is missing a file matching $PATTERN -- IdeBackendService.launchNode() will fail its REQUIRED_NATIVE_LIBS preflight check for $ABI."
                 MISSING=1
               fi
             done
