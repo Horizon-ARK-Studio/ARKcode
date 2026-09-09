@@ -37,15 +37,16 @@
 # (i.e. not guessed from the library's own name -- "libsqlite" not
 # "sqlite" (that package is just the sqlite3 CLI binary, per its own
 # build.sh -- the shared library is split into its own package),
-# "c-ares" not "libcares", "libc++" ships
-# libc++_shared.so specifically because every C++-linked Termux
-# package builds against it by default, per that package's own
-# build.sh comment):
+# "c-ares" not "libcares", "libicu" not "icu" (same CLI/library split
+# as sqlite -- confirmed against libicu/build.sh in
+# termux/termux-packages), "libc++" ships libc++_shared.so specifically
+# because every C++-linked Termux package builds against it by
+# default, per that package's own build.sh comment):
 #   libz.so.1                          <- zlib
 #   libcares.so                        <- c-ares
 #   libsqlite3.so                      <- libsqlite
 #   libcrypto.so.3, libssl.so.3        <- openssl
-#   libicui18n.so.<ver>, libicuuc.so.<ver> <- icu (version floats with
+#   libicui18n.so.<ver>, libicuuc.so.<ver> <- libicu (version floats with
 #                                          the package -- this script
 #                                          copies whatever the package
 #                                          actually ships, not a
@@ -113,7 +114,7 @@ declare -A LIB_TO_PACKAGE=(
 # icu's two libraries carry a version suffix that moves with the
 # package (see header) -- handled separately below via a glob match
 # instead of an exact filename, unlike the fixed names above.
-ICU_PACKAGE="icu"
+ICU_PACKAGE="libicu"
 
 mkdir -p "${CACHE_DIR}" "${DEST}"
 
