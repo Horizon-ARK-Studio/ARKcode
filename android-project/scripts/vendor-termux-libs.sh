@@ -34,14 +34,16 @@
 #
 # Real Termux package names for each REQUIRED_NATIVE_LIBS entry,
 # confirmed against each package's own build.sh in termux/termux-packages
-# (i.e. not guessed from the library's own name -- "sqlite" not
-# "libsqlite3", "c-ares" not "libcares", "libc++" ships
+# (i.e. not guessed from the library's own name -- "libsqlite" not
+# "sqlite" (that package is just the sqlite3 CLI binary, per its own
+# build.sh -- the shared library is split into its own package),
+# "c-ares" not "libcares", "libc++" ships
 # libc++_shared.so specifically because every C++-linked Termux
 # package builds against it by default, per that package's own
 # build.sh comment):
 #   libz.so.1                          <- zlib
 #   libcares.so                        <- c-ares
-#   libsqlite3.so                      <- sqlite
+#   libsqlite3.so                      <- libsqlite
 #   libcrypto.so.3, libssl.so.3        <- openssl
 #   libicui18n.so.<ver>, libicuuc.so.<ver> <- icu (version floats with
 #                                          the package -- this script
@@ -103,7 +105,7 @@ INDEX_FILE="${CACHE_DIR}/Packages"
 declare -A LIB_TO_PACKAGE=(
     ["libz.so.1"]="zlib"
     ["libcares.so"]="c-ares"
-    ["libsqlite3.so"]="sqlite"
+    ["libsqlite3.so"]="libsqlite"
     ["libcrypto.so.3"]="openssl"
     ["libssl.so.3"]="openssl"
     ["libc++_shared.so"]="libc++"
