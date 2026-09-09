@@ -40,12 +40,15 @@ import kotlinx.coroutines.flow.StateFlow
  *
  *  1. `libnode.so` under this ABI's `jniLibs/` -- the actual
  *     bionic-linked Node binary section 5(b) describes building from
- *     `vendor/termux-packages/nodejs-lts/`. That build needs a real
+ *     termux-packages' `nodejs-lts` recipe, fetched fresh (not
+ *     git-vendored) by `scripts/vendor-termux-recipe.sh` into
+ *     `build/termux-recipe/nodejs-lts/`. That build needs a real
  *     NDK + host LLVM toolchain and, per that recipe's own `build.sh`
  *     comment, takes on the order of hours per architecture; it is
- *     not something any step in this repo runs today. Vendoring the
- *     *recipe* (already done, see that directory's own README) is
- *     sourcing only, not a build step.
+ *     not something any step in this repo runs today.
+ *     `.github/workflows/build-libnode.yml` is what actually fetches
+ *     and runs it -- fetching the recipe is sourcing only, not a
+ *     build step by itself.
  *  2. `code-server`'s server-side bundle (`out/node/entry.js` plus
  *     its `node_modules`) under `assets/code-server/`, extracted to
  *     `filesDir/code-server/` by [extractAssetsOnce] below.
@@ -201,7 +204,7 @@ class IdeBackendService : Service() {
         if (!nodeBinary.exists()) {
             fail(
                 "libnode.so not found under ${applicationInfo.nativeLibraryDir} -- build it " +
-                    "from vendor/termux-packages/nodejs-lts/ (plan section 5b) and package it " +
+                    "from the nodejs-lts recipe (scripts/vendor-termux-recipe.sh, plan section 5b) and package it " +
                     "as jniLibs/<abi>/libnode.so before this can start for real",
             )
             return

@@ -32,14 +32,26 @@ Status: **draft, Node/code-server sourcing intentionally open (§5)**
 > directory up to be served, not this patch (see §7's phase table,
 > unchanged).
 >
-> Phase 2 sourcing has one input now too:
-> `android-project/vendor/termux-packages/nodejs-lts/` is
-> termux-packages' own bionic-targeting Node build recipe (§5 option
-> (b)), vendored verbatim for reference. See that directory's own
-> `README.md` for exact provenance/licensing and, importantly, for
-> everything it still takes to turn this recipe into an actual binary
-> -- vendoring the recipe is sourcing only, not a build step; nothing
-> in this patch invokes it.
+> Phase 2 sourcing has one input now too: termux-packages' own
+> bionic-targeting Node build recipe (§5 option (b)), `nodejs-lts/`.
+>
+> **Progress note (this patch):** that recipe is no longer git-vendored
+> at `android-project/vendor/termux-packages/nodejs-lts/` -- this patch
+> removes that directory outright. `scripts/vendor-termux-recipe.sh`
+> fetches the same recipe fresh instead (pinned commit + checksum
+> verification, same discipline as `scripts/vendor-code-server.sh`
+> already used for the workbench frontend, §above), landing it at
+> `android-project/build/termux-recipe/nodejs-lts/` -- a plain Gradle
+> `build/` output, already gitignored, never committed. Unlike
+> `vendor-code-server.sh` (manual, run-by-hand), this fetch now runs
+> automatically as the first step of `.github/workflows/
+> build-libnode.yml`'s `build-libnode` job, since that job is this
+> recipe's only consumer and always needs it at whatever commit the
+> script is pinned to. See that script's own header for the exact
+> commit/checksum and the reasoning for automating this one fetch where
+> the frontend one stayed manual. Fetching the recipe is still sourcing
+> only, not a build step by itself -- the rest of that same job is what
+> actually invokes it.
 >
 > **Progress note (this patch):** `IdeBackendService` now execs for
 > real per §4.2 (`ProcessBuilder` against

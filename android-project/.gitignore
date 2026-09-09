@@ -1,16 +1,14 @@
-# Build-time vendored artifacts -- fetched by scripts/vendor-code-server.sh,
-# never committed. See that script's own header for why (size + the
-# eventual real Node binary/native addons being a separate, arch-specific
-# concern from the workbench this script extracts).
+# Build-time vendored artifacts -- fetched by scripts/vendor-code-server.sh
+# and scripts/vendor-termux-recipe.sh, never committed. See each script's
+# own header for why (size, in code-server's case; avoiding a permanent
+# git-history copy of upstream-owned recipe content, in the termux-packages
+# recipe's case) and for where each one's output actually lands
+# (app/src/main/assets/code-server/ and build/termux-recipe/ respectively --
+# the latter already covered by the plain `build/` rule below, called out
+# here so the "why" lives next to the other build-time fetch instead of
+# only in the script itself).
 app/src/main/assets/code-server/
 .vendor-cache/
-
-# The repo root's .gitignore has a blanket `*.patch` rule (for scratch/
-# dev patches). vendor/termux-packages/nodejs-lts/*.patch are tracked
-# upstream build patches, not scratch output -- re-include them
-# explicitly so a future plain `git add .` here doesn't silently drop
-# them again the way it would without this line.
-!vendor/termux-packages/nodejs-lts/*.patch
 
 # Standard Gradle/Android
 .gradle/

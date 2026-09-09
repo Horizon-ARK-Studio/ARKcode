@@ -14,8 +14,9 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        // vendor/termux-packages/nodejs-lts/ (plan section 5b) only
-        // ever produces a libnode.so for these three ABIs -- see
+        // scripts/vendor-termux-recipe.sh's fetched nodejs-lts recipe
+        // (plan section 5b) only ever produces a libnode.so for these
+        // three ABIs -- see
         // VSCODE-IDE-IMPLEMENTATION-PLAN.md section 4.1's jniLibs
         // layout. Restricting here keeps Gradle from expecting a
         // libnode.so for an ABI nothing in this repo builds for.
