@@ -193,6 +193,98 @@ Template:
 
 ---
 
+### BUG-0003: CI smoke test can't distinguish IdeBackendState.Ready from Failed, and build-time vendoring never ran in CI at all
+- **Status:** `FIXED (pending a real CI run to confirm)`
+- **Found:** 2026-09-09
+- **Stage:** `v1 (Android)`
+- **Location:** `.github/workflows/android-build.yml` (both jobs)
+- **Severity:** `High`
+
+- **Description:**
+  Two compounding gaps in `android-build.yml`:
+  1. `scripts/vendor-code-server.sh`, `scripts/vendor-code-server-server.sh`,
+     and `scripts/vendor-termux-libs.sh` are all described in their own
+     headers as "build-time" dependencies, but nothing in this repo's
+     CI ever actually invoked them -- they were manual, run-by-hand
+     steps only. `assemble-debug` therefore always packaged an APK
+     missing `entry.js`, the workbench, and `libnode.so`'s
+     `REQUIRED_NATIVE_LIBS` (BUG-0002), with no build-time signal that
+     any of it was absent.
+  2. `install-launch-smoke-test` only ever checked `adb shell pidof
+     com.arkware.ide` a few seconds after launch. Once BUG-0001's fix
+     landed (`IdeBackendState.Failed` shows a UI and keeps the process
+     alive, rather than crashing), that check became unable to tell
+     "the IDE backend actually started" apart from "the IDE backend
+     failed, but the app survived it" -- both leave the process
+     running. The smoke test has been reporting green regardless of
+     which one actually happened.
+
+- **Expected:**
+  CI performs the same build-time vendoring the plan documents, and
+  the smoke test reports whether the backend actually reached
+  `Ready`, not just whether the process is still alive.
+
+- **Actual:**
+  `assemble-debug` produced a structurally-valid but non-functional
+  APK on every run, and `install-launch-smoke-test` passed every time
+  regardless, giving false confidence that the Android shell "works."
+
+- **Reproduction:**
+  1. Look at any pre-patch `install-launch-smoke-test` run's log --
+     it reports "smoke test passed" even though `entry.js`,
+     `libnode.so`, and its shared-library deps were never vendored
+     anywhere in that run.
+
+- **Likely cause:**
+  Both vendor scripts and the Termux shared-lib script were written
+  deliberately manual/run-by-hand (see each script's own header,
+  correct at the time for their intended scope), and nothing wired
+  them into CI afterward; the smoke test predates BUG-0001's
+  crash-proofing fix and was never revisited once that fix changed
+  what "process still alive" actually implies.
+
+- **Fix:**
+  `assemble-debug` now runs all three vendor scripts as explicit
+  steps before `gradle assembleDebug`, best-effort overlays the
+  latest successful `build-libnode.yml` artifact (`libnode-jniLibs`)
+  into `jniLibs/`, and reports exactly which build-time artifacts are
+  present/missing per ABI in the job summary
+  (`REQUIRED_NATIVE_LIBS`, mirrored from
+  `IdeBackendService`'s own list -- kept in sync by hand). This step
+  is deliberately non-fatal on its own: a Kotlin-only change
+  shouldn't be blocked on a multi-hour `build-libnode.yml` artifact
+  existing. `install-launch-smoke-test` now polls logcat for
+  `MainActivity`'s own `"backend ready on port"` /
+  `"backend failed to start"` log lines and reports one of three
+  distinct outcomes -- `ready`, `failed` (app survived but backend
+  didn't start -- expected and reported as such whenever the summary
+  above shows a missing x86_64 artifact, not itself a bug), or
+  `crashed`/`neither observed` (real failures, non-zero exit).
+
+- **Test:**
+  Run this workflow for real and confirm: (1) the job summary
+  correctly reflects whatever is/isn't vendored, (2) the smoke test
+  step reports `ready` once `build-libnode.yml` has produced an
+  x86_64 `libnode.so` + its shared-library deps for `assemble-debug`
+  to pick up, and reports the `failed`-with-caveat outcome (not a red
+  X) until then, and (3) a genuine startup crash (e.g. temporarily
+  reverting BUG-0001's fix) is still caught as `crashed`, not masked.
+
+- **Notes:**
+  This does not fix BUG-0002 itself -- `vendor-termux-libs.sh` running
+  in CI now should resolve it there (that script was already correct,
+  just never invoked), but this patch was authored in a sandboxed
+  environment whose network egress does not reach
+  `packages.termux.dev` or code-server's GitHub release assets (see
+  `build-libnode.yml`'s own header for the identical constraint on
+  the NDK build), so none of this could be run and observed end to
+  end here -- only reasoned through against each script's documented
+  behavior and this repo's existing conventions. Flagged as
+  "pending a real CI run to confirm" rather than closed outright, per
+  this file's own Rule 2.
+
+---
+
 ## Rules
 
 1. Every discovered bug gets an entry under **Active Bugs**.

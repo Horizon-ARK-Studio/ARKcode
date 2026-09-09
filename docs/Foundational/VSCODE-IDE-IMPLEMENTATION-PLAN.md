@@ -78,6 +78,33 @@ Status: **draft, Node/code-server sourcing intentionally open (§5)**
 > overlay button (the `NoActionBar` theme rules out a menu-bar entry
 > point) and syncs in before every backend start / out on every
 > `onStop()`.
+>
+> **Progress note (this patch):** Phase 6 landed --
+> `.github/workflows/android-build.yml`'s `assemble-debug` job now
+> actually runs `scripts/vendor-code-server.sh`,
+> `scripts/vendor-code-server-server.sh`, and
+> `scripts/vendor-termux-libs.sh` as build steps (previously all
+> three were manual, run-by-hand only -- see BUG-0003 in
+> `bugs-caught/`), and best-effort overlays the latest successful
+> `build-libnode.yml` artifact into `jniLibs/` before assembling. A
+> new "Report vendored-artifact status" step lists exactly which of
+> `entry.js`, the workbench, and each ABI's `libnode.so` +
+> `REQUIRED_NATIVE_LIBS` are present, non-fatally (a Kotlin-only
+> change shouldn't block on a multi-hour `libnode.so` build landing).
+> `install-launch-smoke-test` no longer relies on a bare `pidof` check
+> -- see BUG-0003 for why that stopped being meaningful once
+> BUG-0001's crash-proofing shipped -- it now polls logcat for
+> `MainActivity`'s own Ready/Failed log lines and reports which one
+> actually happened. **Not landed by this patch:** the shared
+> libraries and native addons themselves (BUG-0002, and the seven
+> addons `vendor-code-server-server.sh` strips) still don't exist
+> anywhere pre-built for bionic -- this patch wires the pipeline that
+> fetches/verifies them at build time on a runner with real internet
+> access; it does not (and, authored inside the sandbox
+> `build-libnode.yml`'s own header already describes as unable to
+> reach `packages.termux.dev` or a GitHub release asset, could not)
+> vendor them itself. See BUG-0003's own "Notes" for the same
+> constraint stated against this specific patch.
 
 This plan replaces ARKware's current `vscode` flavor -- which just
 points the shell at the *remote* `vscode.dev` SPA, per
