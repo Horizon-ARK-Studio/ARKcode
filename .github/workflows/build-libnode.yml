@@ -9,7 +9,10 @@ name: Build libnode.so
 # termux-packages' own Docker build environment, once per ABI this
 # project ships (app/build.gradle.kts' abiFilters: arm64-v8a,
 # armeabi-v7a, x86_64), and uploads the resulting Node binary (renamed
-# libnode.so per VSCODE-IDE-IMPLEMENTATION-PLAN.md section 4.1) as a
+# libnode.so per VSCODE-IDE-IMPLEMENTATION-PLAN.md section 4.1),
+# together with that same ABI's libnode.so shared-library dependencies
+# (BUG-0002 -- fetched per-arch by scripts/vendor-termux-libs.sh,
+# invoked once per matrix entry below) as a single flat per-ABI
 # workflow artifact.
 #
 # Why this is its own workflow, not a job in android-build.yml:
@@ -26,15 +29,15 @@ name: Build libnode.so
 # chromium-browser-clang bucket. GitHub-hosted runners have open
 # internet, so it can run there.
 #
-# What this does NOT do: commit the resulting .so anywhere, or wire it
-# into android-build.yml's Gradle build. libnode.so per ABI easily
-# runs 80-150MB — dropping that into git history via an automated
-# commit is its own decision (Git LFS or a release asset, not a
-# regular commit) that deserves a deliberate choice, not one made
-# silently by a workflow run. Download the artifacts this produces and
-# place them under app/src/main/jniLibs/<abi>/libnode.so by hand (or
-# wire up that automation separately) once you've confirmed a build
-# actually succeeds and the binary runs.
+# What this does NOT do: commit the resulting files anywhere, or wire
+# them into android-build.yml's Gradle build directly -- that's
+# android-build.yml's own "Fetch latest libnode.so build" step's job
+# (best-effort, consumes the `bundle` job's `libnode-jniLibs` artifact
+# below), not this workflow's. libnode.so per ABI easily runs
+# 80-150MB — dropping that into git history via an automated commit
+# is its own decision (Git LFS or a release asset, not a regular
+# commit) that deserves a deliberate choice, not one made silently by
+# a workflow run.
 #
 # Known unknowns, since this has not yet been run for real:
 # - Whether 350 minutes is actually enough. GitHub-hosted runners hard
@@ -160,12 +163,13 @@ jobs:
           # building each from source — that's what actually keeps
           # this to "one recipe's worth of hours" instead of "half of
           # termux-packages' dependency graph's worth of hours". See
-          # nodejs-lts/build.sh's TERMUX_PKG_DEPENDS line and
-          # scripts/vendor-termux-libs.sh's own header, which flags
-          # that those same shared-library deps still need
-          # bundling into jniLibs/ separately at Android-packaging
-          # time — this step doesn't do that; it only produces node
-          # itself.
+          # nodejs-lts/build.sh's TERMUX_PKG_DEPENDS line. Those same
+          # prebuilt deps are what the node binary this produces links
+          # against at runtime (readelf -d's NEEDED entries, BUG-0002)
+          # -- the "Vendor this ABI's shared-library dependencies" step
+          # below is what actually bundles matching copies of them
+          # into this job's jniLibs output; this step only produces
+          # node itself.
           ./scripts/run-docker.sh ./build-package.sh -I -a "${{ matrix.arch }}" nodejs-lts
 
       - name: Extract the node binary from the built .deb
@@ -201,13 +205,61 @@ jobs:
           file libnode.so
           ls -lh libnode.so "$DEB"
 
-      - name: Upload libnode.so (${{ matrix.abi }})
+      # This ABI's libnode.so is only half of BUG-0002's fix -- the
+      # binary above is dynamically linked against 8 shared libraries
+      # (openssl, icu, c-ares, sqlite, zlib, libc++) that no stock
+      # Android device ships. scripts/vendor-termux-libs.sh already
+      # knew how to fetch these (it just defaulted to arm64-v8a/
+      # aarch64 only, since that was the only ABI anything vendored
+      # libnode.so for at the time it was written) -- this patch
+      # parameterizes it so this same script, called once per matrix
+      # arch/abi here, fetches the RIGHT arch's libraries for whichever
+      # ABI this job is building, instead of the arm64-v8a build
+      # relying on it and armeabi-v7a/x86_64 having no equivalent path
+      # to their own shared-lib deps at all.
+      - name: Vendor this ABI's Termux shared-library dependencies
+        run: |
+          ./android-project/scripts/vendor-termux-libs.sh "${{ matrix.arch }}" "${{ matrix.abi }}"
+
+      # Stage libnode.so and its shared-library deps together, flat,
+      # in one directory -- this is what actually ships as this ABI's
+      # artifact. Deliberately NOT reusing termux-packages/ or
+      # android-project/app/src/main/jniLibs/<abi>/ directly as the
+      # upload root: actions/upload-artifact computes its packed
+      # layout from the least-common-ancestor of every path handed to
+      # it, and those two directories only share the repo root as a
+      # common ancestor -- uploading both as-is would nest the result
+      # under termux-packages/ and android-project/... subpaths,
+      # breaking the `bundle` job's existing flat `$DIR/libnode.so`
+      # assumption below. A dedicated staging/ directory keeps this
+      # job's output flat regardless of where its inputs happened to
+      # land.
+      - name: Stage this ABI's jniLibs output
+        run: |
+          set -eu
+          mkdir -p staging
+          cp termux-packages/libnode.so staging/
+          cp android-project/app/src/main/jniLibs/${{ matrix.abi }}/lib* staging/
+          echo "Staged for ${{ matrix.abi }}:"
+          ls -lh staging/
+
+      - name: Upload jniLibs bundle (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
           name: libnode.so-${{ matrix.abi }}
-          path: |
-            termux-packages/libnode.so
-            termux-packages/output/nodejs-lts*.deb
+          path: staging
+          if-no-files-found: error
+
+      # Kept separate from the jniLibs bundle above (own artifact,
+      # own name) -- the `bundle` job below only ever wants the flat
+      # staging/ layout, and the .deb is provenance/debugging
+      # material, not something Gradle or IdeBackendService ever
+      # touches.
+      - name: Upload built .deb (${{ matrix.abi }}, provenance)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-lts-deb-${{ matrix.abi }}
+          path: termux-packages/output/nodejs-lts*.deb
           if-no-files-found: error
 
   bundle:
@@ -222,14 +274,18 @@ jobs:
           pattern: libnode.so-*
           path: downloaded
 
-      - name: Arrange as app/src/main/jniLibs/<abi>/libnode.so
+      - name: Arrange as app/src/main/jniLibs/<abi>/
         run: |
           set -eu
           mkdir -p jniLibs
           for DIR in downloaded/libnode.so-*; do
             ABI="$(basename "$DIR" | sed 's/^libnode.so-//')"
             mkdir -p "jniLibs/$ABI"
-            cp "$DIR/libnode.so" "jniLibs/$ABI/libnode.so"
+            # Copies libnode.so AND its staged shared-library deps
+            # together -- see the "Stage this ABI's jniLibs output"
+            # step above for why $DIR is already flat and needs no
+            # further filtering here.
+            cp "$DIR"/* "jniLibs/$ABI/"
           done
           find jniLibs -type f -exec ls -lh {} \;
 

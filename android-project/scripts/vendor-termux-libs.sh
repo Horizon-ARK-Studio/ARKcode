@@ -51,7 +51,10 @@
 #   libc++_shared.so                   <- libc++
 #
 # Usage:
-#   ./scripts/vendor-termux-libs.sh
+#   ./scripts/vendor-termux-libs.sh                    # arm64-v8a (default, unchanged)
+#   ./scripts/vendor-termux-libs.sh aarch64 arm64-v8a   # explicit, same as above
+#   ./scripts/vendor-termux-libs.sh arm armeabi-v7a
+#   ./scripts/vendor-termux-libs.sh x86_64 x86_64
 #
 # Like vendor-code-server.sh, deliberately NOT run automatically as
 # part of a Gradle build -- run it by hand, review what it fetched
@@ -64,15 +67,33 @@
 
 set -euo pipefail
 
+# Positional overrides so build-libnode.yml can call this once per
+# matrix ABI (aarch64/arm64-v8a, arm/armeabi-v7a, x86_64/x86_64)
+# instead of only ever fetching arm64-v8a's libraries -- Termux's own
+# repo already publishes a binary-<arch> Packages index per arch
+# (confirmed against packages.termux.dev's dists/stable/main/ layout,
+# same as the header above already verified for binary-aarch64), and
+# matrix.arch's values (aarch64/arm/x86_64) are already Termux's own
+# arch names verbatim, not Android ABI names -- no translation table
+# needed between the two. Defaults preserve this script's original
+# manual-run, arm64-v8a-only behavior for anyone invoking it by hand
+# with no arguments, same as before this change.
+TERMUX_ARCH="${1:-aarch64}"
+ANDROID_ABI="${2:-arm64-v8a}"
 TERMUX_REPO_BASE="https://packages.termux.dev/apt/termux-main"
 TERMUX_REPO_FALLBACK="https://packages-cf.termux.dev/apt/termux-main"
-TERMUX_ARCH="aarch64"          # matches this repo's only built ABI, arm64-v8a
-ANDROID_ABI="arm64-v8a"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEST="${PROJECT_ROOT}/app/src/main/jniLibs/${ANDROID_ABI}"
-CACHE_DIR="${PROJECT_ROOT}/.vendor-cache/termux-libs"
+# Cache dir is per-arch: running this script back to back for two
+# different ABIs (build-libnode.yml's matrix does exactly that, one
+# job per ABI, but a local user could also loop over all three by
+# hand) must not let armeabi-v7a's cached .debs/Packages index answer
+# a query meant for x86_64's -- distinct TERMUX_ARCH subdirectories
+# keep each arch's cache independent instead of silently reusing a
+# stale cross-arch download.
+CACHE_DIR="${PROJECT_ROOT}/.vendor-cache/termux-libs/${TERMUX_ARCH}"
 INDEX_FILE="${CACHE_DIR}/Packages"
 
 # name-of-.so-we-need -> Termux package that ships it. One package can

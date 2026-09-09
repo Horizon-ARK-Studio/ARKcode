@@ -177,6 +177,16 @@ Template:
   a real NDK/cross-compile task, not something fixable by editing
   Kotlin.
 
+  **Update (BUG-0003's patch):** `scripts/vendor-termux-libs.sh` now
+  takes the Termux arch + Android ABI as parameters instead of being
+  hardcoded to `aarch64`/`arm64-v8a`, and `build-libnode.yml`'s
+  `build-libnode` job calls it once per matrix entry, so each ABI's
+  `libnode.so` build and its matching shared-library deps are fetched
+  and staged together as one artifact. This should close this bug for
+  real once that workflow actually runs -- unverified here for the
+  same reason BUG-0003 gives (this sandbox can't reach
+  `packages.termux.dev` or run the NDK build either).
+
 - **Test:**
   Once the libraries are vendored: rebuild, reinstall, launch, and
   confirm `IdeBackendState.Ready` is reached and the WebView navigates
